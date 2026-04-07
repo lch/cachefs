@@ -129,11 +129,9 @@ func TestConcurrentReads(t *testing.T) {
 	const readers = 32
 	var wg sync.WaitGroup
 	errCh := make(chan error, readers)
-	for i := 0; i < readers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 100; j++ {
+	for range readers {
+		wg.Go(func() {
+			for range 100 {
 				got, err := mgr.Read("aa", 0, uint64(len(payload)))
 				if err != nil {
 					errCh <- err
@@ -144,7 +142,7 @@ func TestConcurrentReads(t *testing.T) {
 					return
 				}
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -173,21 +171,17 @@ func TestConcurrentAppendAndRead(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, 2)
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+	wg.Go(func() {
+		for range iterations {
 			if _, err := mgr.Append("aa", []byte("x")); err != nil {
 				errCh <- err
 				return
 			}
 		}
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+	wg.Go(func() {
+		for range iterations {
 			got, err := mgr.Read("aa", 0, 4)
 			if err != nil {
 				errCh <- err
@@ -198,7 +192,7 @@ func TestConcurrentAppendAndRead(t *testing.T) {
 				return
 			}
 		}
-	}()
+	})
 
 	wg.Wait()
 	close(errCh)

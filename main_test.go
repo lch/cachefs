@@ -15,7 +15,7 @@ import (
 
 	gfs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	cachefsfs "github.com/lch/cachefs/fs"
+	"github.com/lch/cachefs/fs"
 	"github.com/lch/cachefs/store"
 )
 
@@ -394,8 +394,8 @@ func mountIntegrationFSWithStore(t *testing.T, backendDir string) (string, store
 		t.Fatalf("open store: %v", err)
 	}
 
-	shared := cachefsfs.NewCacheFS(st, uint32(os.Getuid()), uint32(os.Getgid()))
-	root := cachefsfs.NewRootNode(shared)
+	shared := fs.NewCacheFS(st, uint32(os.Getuid()), uint32(os.Getgid()))
+	root := fs.NewRootNode(shared)
 	sec := time.Second
 	server, err := gfs.Mount(mountDir, root, &gfs.Options{
 		MountOptions: fuse.MountOptions{
@@ -449,8 +449,8 @@ func mountIntegrationFS(t *testing.T, backendDir string) (string, func()) {
 		t.Fatalf("open store: %v", err)
 	}
 
-	shared := cachefsfs.NewCacheFS(st, uint32(os.Getuid()), uint32(os.Getgid()))
-	root := cachefsfs.NewRootNode(shared)
+	shared := fs.NewCacheFS(st, uint32(os.Getuid()), uint32(os.Getgid()))
+	root := fs.NewRootNode(shared)
 	sec := time.Second
 	server, err := gfs.Mount(mountDir, root, &gfs.Options{
 		MountOptions: fuse.MountOptions{

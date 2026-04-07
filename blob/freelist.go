@@ -116,7 +116,7 @@ func (fl *FreeList) Unmarshal(data []byte) error {
 
 	regions := make([]FreeRegion, 0, count)
 	var prevEnd uint64
-	for i := uint32(0); i < count; i++ {
+	for i := range count {
 		base := 4 + int(i)*16
 		offset := binary.LittleEndian.Uint64(data[base : base+8])
 		length := binary.LittleEndian.Uint64(data[base+8 : base+16])

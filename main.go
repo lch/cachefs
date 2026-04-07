@@ -12,7 +12,7 @@ import (
 
 	gfs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
-	cachefsfs "github.com/lch/cachefs/fs"
+	"github.com/lch/cachefs/fs"
 	"github.com/lch/cachefs/store"
 )
 
@@ -33,7 +33,7 @@ func run(args []string) error {
 	fsFlags.SetOutput(os.Stderr)
 
 	debug := fsFlags.Bool("debug", false, "enable FUSE debug logging")
-	allowOther := fsFlags.Bool("allow-other", false, "allow other users to access the mount")
+	allowOther := fsFlags.Bool("allow_other", false, "allow other users to access the mount")
 	uid := fsFlags.Uint("uid", uint(os.Getuid()), "default file owner UID")
 	gid := fsFlags.Uint("gid", uint(os.Getgid()), "default file owner GID")
 
@@ -65,8 +65,8 @@ func run(args []string) error {
 		}
 	}()
 
-	shared := cachefsfs.NewCacheFS(st, uint32(*uid), uint32(*gid))
-	root := cachefsfs.NewRootNode(shared)
+	shared := fs.NewCacheFS(st, uint32(*uid), uint32(*gid))
+	root := fs.NewRootNode(shared)
 	sec := defaultTimeout
 	server, err := gfs.Mount(mountPoint, root, &gfs.Options{
 		MountOptions: fuse.MountOptions{
