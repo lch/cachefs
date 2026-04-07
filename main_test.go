@@ -16,7 +16,6 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	cachefsfs "github.com/lch/cachefs/fs"
 	"github.com/lch/cachefs/store"
-	"go.etcd.io/bbolt"
 )
 
 func TestIntegrationFilesystem(t *testing.T) {
@@ -236,11 +235,10 @@ func mountIntegrationFS(t *testing.T, backendDir string) (string, func()) {
 	t.Helper()
 
 	mountDir := t.TempDir()
-	db, err := bbolt.Open(filepath.Join(backendDir, "cache.db"), 0o600, &bbolt.Options{Timeout: time.Second})
+	st, err := store.NewStore(backendDir)
 	if err != nil {
-		t.Fatalf("open bbolt db: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
-	st := store.New(db)
 
 	shared := cachefsfs.NewCacheFS(st, uint32(os.Getuid()), uint32(os.Getgid()))
 	root := cachefsfs.NewRootNode(shared)

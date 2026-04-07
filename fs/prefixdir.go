@@ -75,26 +75,24 @@ func (n *PrefixDirNode) Create(ctx context.Context, name string, flags uint32, m
 	if perm == 0 {
 		perm = meta.DefaultFileMode
 	}
-	now := time.Now().Unix()
-	attr := &meta.FileAttr{
-		Size:  0,
-		Mode:  perm,
-		Uid:   n.cfs.Uid,
-		Gid:   n.cfs.Gid,
-		Atime: now,
-		Mtime: now,
-		Ctime: now,
-	}
-	if err := n.cfs.Store.PutFile(n.prefix, name, []byte{}, attr); err != nil {
+	if err := n.cfs.Store.WriteFile(n.prefix, name, []byte{}, perm); err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, nil, 0, syscall.EEXIST
 		}
 		return nil, nil, 0, gfs.ToErrno(err)
 	}
 
+	attr, err := n.cfs.Store.GetMeta(n.prefix, name)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil, 0, syscall.ENOENT
+		}
+		return nil, nil, 0, gfs.ToErrno(err)
+	}
+
 	fillFileEntryOut(out, n.cfs, attr, fileIno(n.prefix, name))
 	attrCopy := *attr
-	return n.newFileInode(ctx, name), &CacheFileHandle{cfs: n.cfs, prefix: n.prefix, filename: name, attr: &attrCopy, buf: []byte{}}, 0, 0
+	return n.newFileInode(ctx, name), &CacheFileHandle{cfs: n.cfs, prefix: n.prefix, filename: name, attr: &attrCopy, mode: attr.Mode, buf: []byte{}}, 0, 0
 }
 
 func (n *PrefixDirNode) Unlink(ctx context.Context, name string) syscall.Errno {
@@ -148,29 +146,20 @@ func (n *PrefixDirNode) Rename(ctx context.Context, name string, newParent gfs.I
 		return 0
 	}
 
-	attr, err := n.cfs.Store.GetMeta(n.prefix, name)
+	data, attr, err := n.cfs.Store.ReadFile(n.prefix, name)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return syscall.ENOENT
 		}
-		return gfs.ToErrno(err)
-	}
-	content, err := n.cfs.Store.GetContent(n.prefix, name)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return syscall.ENOENT
-		}
-		return gfs.ToErrno(err)
-	}
-
-	attr.Size = uint64(len(content))
-	if err := target.cfs.Store.PutFile(target.prefix, newName, content, attr); err != nil {
 		return gfs.ToErrno(err)
 	}
 	if err := n.cfs.Store.DeleteFile(n.prefix, name); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return syscall.ENOENT
 		}
+		return gfs.ToErrno(err)
+	}
+	if err := target.cfs.Store.WriteFile(target.prefix, newName, data, attr.Mode); err != nil {
 		return gfs.ToErrno(err)
 	}
 	return 0

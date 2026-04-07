@@ -4,13 +4,14 @@ import "testing"
 
 func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 	original := &FileAttr{
-		Size:  123456789,
-		Mode:  DefaultFileMode,
-		Uid:   1000,
-		Gid:   1001,
-		Atime: 1712345678,
-		Mtime: 1712345679,
-		Ctime: 1712345680,
+		Offset: 1234,
+		Length: 123456789,
+		Mode:   DefaultFileMode,
+		Uid:    1000,
+		Gid:    1001,
+		Atime:  1712345678,
+		Mtime:  1712345679,
+		Ctime:  1712345680,
 	}
 
 	data := Marshal(original)

@@ -2,7 +2,6 @@ package fs
 
 import (
 	"context"
-	"path/filepath"
 	"reflect"
 	"syscall"
 	"testing"
@@ -10,7 +9,6 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/lch/cachefs/internal/meta"
 	"github.com/lch/cachefs/store"
-	"go.etcd.io/bbolt"
 )
 
 func TestRootLookupMkdirAndReaddir(t *testing.T) {
@@ -79,8 +77,8 @@ func TestRootRmdirAndGetattrStatfs(t *testing.T) {
 		t.Fatalf("Mkdir bb = (%v, %v), want inode and OK", inode, errno)
 	}
 
-	if errno := st.PutFile("aa", "alpha", []byte("x"), &meta.FileAttr{Size: 1, Mode: meta.DefaultFileMode}); errno != nil {
-		t.Fatalf("PutFile: %v", errno)
+	if err := st.WriteFile("aa", "alpha", []byte("x"), meta.DefaultFileMode); err != nil {
+		t.Fatalf("WriteFile: %v", err)
 	}
 
 	if errno := root.Rmdir(ctx, "aa"); errno != syscall.ENOTEMPTY {
@@ -108,8 +106,8 @@ func TestRootRmdirAndGetattrStatfs(t *testing.T) {
 	if statfs.Blocks == 0 || statfs.Bsize == 0 {
 		t.Fatalf("Statfs unexpectedly empty: %#v", statfs)
 	}
-	if statfs.Files != 4 {
-		t.Fatalf("Statfs files = %d, want 4", statfs.Files)
+	if statfs.Files != 1 {
+		t.Fatalf("Statfs files = %d, want 1", statfs.Files)
 	}
 
 	if errno := root.Rmdir(ctx, "aa"); errno != syscall.ENOTEMPTY {
@@ -151,11 +149,10 @@ func readDirEntries(root *RootNode) ([]string, error) {
 
 func newTestRoot(t *testing.T) (*RootNode, store.Store) {
 	t.Helper()
-	db, err := bbolt.Open(filepath.Join(t.TempDir(), "cache.db"), 0o600, nil)
+	st, err := store.NewStore(t.TempDir())
 	if err != nil {
-		t.Fatalf("open bbolt db: %v", err)
+		t.Fatalf("open store: %v", err)
 	}
-	st := store.New(db)
 	t.Cleanup(func() {
 		_ = st.Close()
 	})

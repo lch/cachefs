@@ -9,6 +9,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/lch/cachefs/internal/meta"
+	"github.com/lch/cachefs/store"
 )
 
 func TestFileOpenAndGetattr(t *testing.T) {
@@ -17,18 +18,8 @@ func TestFileOpenAndGetattr(t *testing.T) {
 		t.Fatalf("CreatePrefix: %v", err)
 	}
 
-	attr := &meta.FileAttr{
-		Size:  5,
-		Mode:  0o640,
-		Uid:   123,
-		Gid:   456,
-		Atime: 111,
-		Mtime: 222,
-		Ctime: 333,
-	}
-	if err := st.PutFile("aa", "alpha", []byte("hello"), attr); err != nil {
-		t.Fatalf("PutFile: %v", err)
-	}
+	attr := &meta.FileAttr{Length: 5, Mode: 0o640, Uid: 123, Gid: 456, Atime: 111, Mtime: 222, Ctime: 333}
+	mustWriteFileWithMeta(t, st, "aa", "alpha", []byte("hello"), attr)
 
 	node := &FileNode{cfs: root.cfs, prefix: "aa", filename: "alpha"}
 	fh, flags, errno := node.Open(context.Background(), 0)
@@ -63,17 +54,7 @@ func TestFileSetattrResizeAndMetadata(t *testing.T) {
 	if err := st.CreatePrefix("aa"); err != nil {
 		t.Fatalf("CreatePrefix: %v", err)
 	}
-	if err := st.PutFile("aa", "alpha", []byte("hello"), &meta.FileAttr{
-		Size:  5,
-		Mode:  0o640,
-		Uid:   123,
-		Gid:   456,
-		Atime: 111,
-		Mtime: 222,
-		Ctime: 333,
-	}); err != nil {
-		t.Fatalf("PutFile: %v", err)
-	}
+	mustWriteFileWithMeta(t, st, "aa", "alpha", []byte("hello"), &meta.FileAttr{Length: 5, Mode: 0o640, Uid: 123, Gid: 456, Atime: 111, Mtime: 222, Ctime: 333})
 
 	node := &FileNode{cfs: root.cfs, prefix: "aa", filename: "alpha"}
 
@@ -82,9 +63,9 @@ func TestFileSetattrResizeAndMetadata(t *testing.T) {
 	if errno := node.Setattr(context.Background(), nil, shrink, &out); errno != 0 {
 		t.Fatalf("Setattr shrink errno = %v", errno)
 	}
-	got, err := st.GetContent("aa", "alpha")
+	got, _, err := st.ReadFile("aa", "alpha")
 	if err != nil {
-		t.Fatalf("GetContent after shrink: %v", err)
+		t.Fatalf("ReadFile after shrink: %v", err)
 	}
 	if string(got) != "he" {
 		t.Fatalf("content after shrink = %q, want %q", got, "he")
@@ -93,17 +74,17 @@ func TestFileSetattrResizeAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMeta after shrink: %v", err)
 	}
-	if metaAfterShrink.Size != 2 {
-		t.Fatalf("size after shrink = %d, want 2", metaAfterShrink.Size)
+	if metaAfterShrink.Length != 2 {
+		t.Fatalf("size after shrink = %d, want 2", metaAfterShrink.Length)
 	}
 
 	grow := &fuse.SetAttrIn{SetAttrInCommon: fuse.SetAttrInCommon{Valid: fuse.FATTR_SIZE, Size: 6}}
 	if errno := node.Setattr(context.Background(), nil, grow, &out); errno != 0 {
 		t.Fatalf("Setattr grow errno = %v", errno)
 	}
-	got, err = st.GetContent("aa", "alpha")
+	got, _, err = st.ReadFile("aa", "alpha")
 	if err != nil {
-		t.Fatalf("GetContent after grow: %v", err)
+		t.Fatalf("ReadFile after grow: %v", err)
 	}
 	if len(got) != 6 || string(got[:2]) != "he" || !reflect.DeepEqual(got[2:], []byte{0, 0, 0, 0}) {
 		t.Fatalf("content after grow = %v, want [104 101 0 0 0 0]", got)
@@ -112,8 +93,8 @@ func TestFileSetattrResizeAndMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMeta after grow: %v", err)
 	}
-	if metaAfterGrow.Size != 6 {
-		t.Fatalf("size after grow = %d, want 6", metaAfterGrow.Size)
+	if metaAfterGrow.Length != 6 {
+		t.Fatalf("size after grow = %d, want 6", metaAfterGrow.Length)
 	}
 	if out.Size != 6 {
 		t.Fatalf("Setattr out size = %d, want 6", out.Size)
@@ -156,17 +137,7 @@ func TestCacheFileHandleReadWriteFlushRelease(t *testing.T) {
 	if err := st.CreatePrefix("aa"); err != nil {
 		t.Fatalf("CreatePrefix: %v", err)
 	}
-	if err := st.PutFile("aa", "alpha", []byte("hello"), &meta.FileAttr{
-		Size:  5,
-		Mode:  0o644,
-		Uid:   123,
-		Gid:   456,
-		Atime: 111,
-		Mtime: 222,
-		Ctime: 333,
-	}); err != nil {
-		t.Fatalf("PutFile: %v", err)
-	}
+	mustWriteFileWithMeta(t, st, "aa", "alpha", []byte("hello"), &meta.FileAttr{Length: 5, Mode: 0o644, Uid: 123, Gid: 456, Atime: 111, Mtime: 222, Ctime: 333})
 
 	node := &FileNode{cfs: root.cfs, prefix: "aa", filename: "alpha"}
 	fh, _, errno := node.Open(context.Background(), 0)
@@ -197,7 +168,7 @@ func TestCacheFileHandleReadWriteFlushRelease(t *testing.T) {
 		t.Fatalf("Write = (%d, %v), want (1, OK)", n, errno)
 	}
 	want := []byte{'h', 'e', 'l', 'l', 'o', 0, 0, 'Z'}
-	if got, err := st.GetContent("aa", "alpha"); err != nil || !reflect.DeepEqual(got, want) {
+	if got, _, err := st.ReadFile("aa", "alpha"); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("store content after write = %v, %v; want %v", got, err, want)
 	}
 	if handle.dirty {
@@ -223,22 +194,22 @@ func TestCacheFileHandleReadWriteFlushRelease(t *testing.T) {
 	if errno := handle.Flush(context.Background()); errno != 0 {
 		t.Fatalf("Flush errno = %v", errno)
 	}
-	if got, err := st.GetContent("aa", "alpha"); err != nil || !reflect.DeepEqual(got, want) {
+	if got, _, err := st.ReadFile("aa", "alpha"); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("store content after flush = %v, %v; want %v", got, err, want)
 	}
 	metaAfterFlush, err := st.GetMeta("aa", "alpha")
 	if err != nil {
 		t.Fatalf("GetMeta after flush: %v", err)
 	}
-	if metaAfterFlush.Size != uint64(len(want)) {
-		t.Fatalf("meta size after flush = %d, want %d", metaAfterFlush.Size, len(want))
+	if metaAfterFlush.Length != uint64(len(want)) {
+		t.Fatalf("meta size after flush = %d, want %d", metaAfterFlush.Length, len(want))
 	}
 
 	if n, errno := handle.Write(context.Background(), []byte("Q"), 0); errno != 0 || n != 1 {
 		t.Fatalf("second Write = (%d, %v), want (1, OK)", n, errno)
 	}
 	want[0] = 'Q'
-	if got, err := st.GetContent("aa", "alpha"); err != nil || !reflect.DeepEqual(got, want) {
+	if got, _, err := st.ReadFile("aa", "alpha"); err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("store content after second write = %v, %v; want %v", got, err, want)
 	}
 	if errno := handle.Release(context.Background()); errno != 0 {
@@ -264,17 +235,7 @@ func TestCacheFileHandleReadAfterUnlink(t *testing.T) {
 	if err := st.CreatePrefix("aa"); err != nil {
 		t.Fatalf("CreatePrefix: %v", err)
 	}
-	if err := st.PutFile("aa", "alpha", []byte("hello"), &meta.FileAttr{
-		Size:  5,
-		Mode:  0o644,
-		Uid:   123,
-		Gid:   456,
-		Atime: 111,
-		Mtime: 222,
-		Ctime: 333,
-	}); err != nil {
-		t.Fatalf("PutFile: %v", err)
-	}
+	mustWriteFileWithMeta(t, st, "aa", "alpha", []byte("hello"), &meta.FileAttr{Length: 5, Mode: 0o644, Uid: 123, Gid: 456, Atime: 111, Mtime: 222, Ctime: 333})
 
 	node := &FileNode{cfs: root.cfs, prefix: "aa", filename: "alpha"}
 	fh, _, errno := node.Open(context.Background(), 0)
@@ -305,6 +266,29 @@ func TestCacheFileHandleReadAfterUnlink(t *testing.T) {
 
 	if n, errno := handle.Write(context.Background(), []byte("!"), 5); errno != syscall.ENOENT || n != 0 {
 		t.Fatalf("Write after unlink = (%d, %v), want (0, ENOENT)", n, errno)
+	}
+}
+
+func mustWriteFileWithMeta(t *testing.T, st store.Store, prefix, name string, data []byte, attr *meta.FileAttr) {
+	t.Helper()
+	if attr == nil {
+		t.Fatal("mustWriteFileWithMeta called with nil attr")
+	}
+	if err := st.WriteFile(prefix, name, data, attr.Mode); err != nil {
+		t.Fatalf("WriteFile(%s,%s): %v", prefix, name, err)
+	}
+	current, err := st.GetMeta(prefix, name)
+	if err != nil {
+		t.Fatalf("GetMeta(%s,%s): %v", prefix, name, err)
+	}
+	current.Mode = attr.Mode
+	current.Uid = attr.Uid
+	current.Gid = attr.Gid
+	current.Atime = attr.Atime
+	current.Mtime = attr.Mtime
+	current.Ctime = attr.Ctime
+	if err := st.UpdateMeta(prefix, name, current); err != nil {
+		t.Fatalf("UpdateMeta(%s,%s): %v", prefix, name, err)
 	}
 }
 

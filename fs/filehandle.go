@@ -19,6 +19,7 @@ type CacheFileHandle struct {
 	prefix   string
 	filename string
 	attr     *meta.FileAttr
+	mode     uint32
 
 	mu    sync.Mutex
 	buf   []byte
@@ -73,7 +74,7 @@ func (h *CacheFileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscal
 	if h.attr != nil {
 		attr = *h.attr
 		h.mu.Unlock()
-		attr.Size = size
+		attr.Length = size
 		fillFileAttrOut(out, h.cfs, &attr, fileIno(h.prefix, h.filename))
 		return 0
 	} else {
@@ -87,7 +88,7 @@ func (h *CacheFileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscal
 		}
 		attr = *loaded
 	}
-	attr.Size = size
+	attr.Length = size
 	fillFileAttrOut(out, h.cfs, &attr, fileIno(h.prefix, h.filename))
 	return 0
 }
@@ -125,13 +126,16 @@ func (h *CacheFileHandle) Write(ctx context.Context, data []byte, off int64) (ui
 		}
 		return 0, gfs.ToErrno(err)
 	}
-	attr := *loaded
+	h.mode = loaded.Mode
 
-	now := time.Now().Unix()
-	attr.Size = uint64(len(newBuf))
-	attr.Mtime = now
-	attr.Ctime = now
-	if err := h.cfs.Store.PutFile(h.prefix, h.filename, newBuf, &attr); err != nil {
+	if err := h.cfs.Store.WriteFile(h.prefix, h.filename, newBuf, h.mode); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, syscall.ENOENT
+		}
+		return 0, gfs.ToErrno(err)
+	}
+	loaded, err = h.cfs.Store.GetMeta(h.prefix, h.filename)
+	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, syscall.ENOENT
 		}
@@ -139,8 +143,9 @@ func (h *CacheFileHandle) Write(ctx context.Context, data []byte, off int64) (ui
 	}
 
 	h.buf = newBuf
-	attrCopy := attr
+	attrCopy := *loaded
 	h.attr = &attrCopy
+	h.mode = loaded.Mode
 	h.dirty = false
 	return uint32(len(data)), 0
 }
@@ -157,6 +162,22 @@ func (h *CacheFileHandle) Flush(ctx context.Context) syscall.Errno {
 		return 0
 	}
 
+	loaded, err := h.cfs.Store.GetMeta(h.prefix, h.filename)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return syscall.ENOENT
+		}
+		return gfs.ToErrno(err)
+	}
+	h.mode = loaded.Mode
+
+	if err := h.cfs.Store.WriteFile(h.prefix, h.filename, h.buf, h.mode); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return syscall.ENOENT
+		}
+		return gfs.ToErrno(err)
+	}
+
 	attr, err := h.cfs.Store.GetMeta(h.prefix, h.filename)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -165,23 +186,9 @@ func (h *CacheFileHandle) Flush(ctx context.Context) syscall.Errno {
 		return gfs.ToErrno(err)
 	}
 
-	attr.Size = uint64(len(h.buf))
-	now := time.Now().Unix()
-	attr.Mtime = now
-	attr.Ctime = now
-	if attr.Atime == 0 {
-		attr.Atime = now
-	}
-
-	if err := h.cfs.Store.PutFile(h.prefix, h.filename, h.buf, attr); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return syscall.ENOENT
-		}
-		return gfs.ToErrno(err)
-	}
-
 	attrCopy := *attr
 	h.attr = &attrCopy
+	h.mode = attr.Mode
 	h.dirty = false
 	return 0
 }
@@ -200,16 +207,12 @@ func (h *CacheFileHandle) touchAtime() error {
 		return err
 	}
 	attr.Atime = time.Now().Unix()
-	if err := h.cfs.Store.PutMeta(h.prefix, h.filename, attr); err != nil {
+	if err := h.cfs.Store.UpdateMeta(h.prefix, h.filename, attr); err != nil {
 		return err
 	}
 	h.mu.Lock()
-	if h.attr != nil {
-		h.attr.Atime = attr.Atime
-	} else {
-		attrCopy := *attr
-		h.attr = &attrCopy
-	}
+	attrCopy := *attr
+	h.attr = &attrCopy
 	h.mu.Unlock()
 	return nil
 }

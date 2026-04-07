@@ -51,8 +51,8 @@ func fillFileEntryOut(out *fuse.EntryOut, cfs *CacheFS, attr *meta.FileAttr, ino
 		ctime = time.Unix(attr.Ctime, 0)
 	}
 	out.Mode = fuse.S_IFREG | perm
-	out.Size = attr.Size
-	out.Blocks = (attr.Size + 511) / 512
+	out.Size = attr.Length
+	out.Blocks = (attr.Length + 511) / 512
 	out.Nlink = 1
 	out.Blksize = 4096
 	out.Uid = attr.Uid
@@ -76,8 +76,8 @@ func fillFileAttrOut(out *fuse.AttrOut, cfs *CacheFS, attr *meta.FileAttr, ino u
 	mtime := time.Unix(attr.Mtime, 0)
 	ctime := time.Unix(attr.Ctime, 0)
 	out.Mode = fuse.S_IFREG | perm
-	out.Size = attr.Size
-	out.Blocks = (attr.Size + 511) / 512
+	out.Size = attr.Length
+	out.Blocks = (attr.Length + 511) / 512
 	out.Nlink = 1
 	out.Blksize = 4096
 	out.Uid = attr.Uid

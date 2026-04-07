@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -15,12 +14,10 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	cachefsfs "github.com/lch/cachefs/fs"
 	"github.com/lch/cachefs/store"
-	"go.etcd.io/bbolt"
 )
 
 const (
 	defaultTimeout = time.Second
-	dbFileName     = "cache.db"
 	fsName         = "cachefs"
 )
 
@@ -58,11 +55,10 @@ func run(args []string) error {
 		return fmt.Errorf("mountpoint %q is not a directory", mountPoint)
 	}
 
-	db, err := bbolt.Open(filepath.Join(backendDir, dbFileName), 0o600, &bbolt.Options{Timeout: defaultTimeout})
+	st, err := store.NewStore(backendDir)
 	if err != nil {
-		return fmt.Errorf("open bbolt database: %w", err)
+		return fmt.Errorf("open store: %w", err)
 	}
-	st := store.New(db)
 	defer func() {
 		if cerr := st.Close(); cerr != nil {
 			log.Printf("closing store: %v", cerr)

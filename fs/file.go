@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"syscall"
-	"time"
 
 	gfs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -24,15 +23,7 @@ func (n *FileNode) Open(ctx context.Context, flags uint32) (gfs.FileHandle, uint
 		return nil, 0, syscall.EIO
 	}
 
-	attr, err := n.cfs.Store.GetMeta(n.prefix, n.filename)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, 0, syscall.ENOENT
-		}
-		return nil, 0, gfs.ToErrno(err)
-	}
-
-	content, err := n.cfs.Store.GetContent(n.prefix, n.filename)
+	data, attr, err := n.cfs.Store.ReadFile(n.prefix, n.filename)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, 0, syscall.ENOENT
@@ -40,14 +31,14 @@ func (n *FileNode) Open(ctx context.Context, flags uint32) (gfs.FileHandle, uint
 		return nil, 0, gfs.ToErrno(err)
 	}
 	attrCopy := *attr
-	attrCopy.Size = uint64(len(content))
 
 	h := &CacheFileHandle{
 		cfs:      n.cfs,
 		prefix:   n.prefix,
 		filename: n.filename,
 		attr:     &attrCopy,
-		buf:      content,
+		mode:     attr.Mode,
+		buf:      data,
 	}
 	return h, fuse.FOPEN_KEEP_CACHE, 0
 }
@@ -85,74 +76,71 @@ func (n *FileNode) Setattr(ctx context.Context, fh gfs.FileHandle, in *fuse.SetA
 		return gfs.ToErrno(err)
 	}
 
-	content, err := n.cfs.Store.GetContent(n.prefix, n.filename)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return syscall.ENOENT
-		}
-		return gfs.ToErrno(err)
-	}
-
-	changedSize := false
-	changedMeta := false
-	mtimeSet := false
-	ctimeSet := false
 	if size, ok := in.GetSize(); ok {
-		changedSize = true
-		changedMeta = true
-		content = resizeContent(content, size)
-		attr.Size = size
+		if err := n.cfs.Store.Truncate(n.prefix, n.filename, size); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return syscall.ENOENT
+			}
+			return gfs.ToErrno(err)
+		}
+		if handle, ok := fh.(*CacheFileHandle); ok && handle != nil {
+			handle.mu.Lock()
+			handle.buf = resizeContent(handle.buf, size)
+			handle.mode = attr.Mode
+			handle.mu.Unlock()
+		}
+		attr, err = n.cfs.Store.GetMeta(n.prefix, n.filename)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return syscall.ENOENT
+			}
+			return gfs.ToErrno(err)
+		}
 	}
 
+	updated := *attr
+	changed := false
 	if mode, ok := in.GetMode(); ok {
-		changedMeta = true
-		attr.Mode = mode & 0o777
+		updated.Mode = mode & 0o777
+		changed = true
 	}
 	if uid, ok := in.GetUID(); ok {
-		changedMeta = true
-		attr.Uid = uid
+		updated.Uid = uid
+		changed = true
 	}
 	if gid, ok := in.GetGID(); ok {
-		changedMeta = true
-		attr.Gid = gid
+		updated.Gid = gid
+		changed = true
 	}
 	if atime, ok := in.GetATime(); ok {
-		attr.Atime = atime.Unix()
+		updated.Atime = atime.Unix()
+		changed = true
 	}
 	if mtime, ok := in.GetMTime(); ok {
-		attr.Mtime = mtime.Unix()
-		mtimeSet = true
+		updated.Mtime = mtime.Unix()
+		changed = true
 	}
 	if ctime, ok := in.GetCTime(); ok {
-		attr.Ctime = ctime.Unix()
-		ctimeSet = true
+		updated.Ctime = ctime.Unix()
+		changed = true
 	}
-	if changedMeta {
-		now := time.Now().Unix()
-		if changedSize && !mtimeSet {
-			attr.Mtime = now
+	if changed {
+		if err := n.cfs.Store.UpdateMeta(n.prefix, n.filename, &updated); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return syscall.ENOENT
+			}
+			return gfs.ToErrno(err)
 		}
-		if !ctimeSet {
-			attr.Ctime = now
-		}
-	}
-	attr.Size = uint64(len(content))
-
-	if err := n.cfs.Store.PutFile(n.prefix, n.filename, content, attr); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return syscall.EEXIST
-		}
-		return gfs.ToErrno(err)
+		attr = &updated
 	}
 
 	fillFileAttrOut(out, n.cfs, attr, fileIno(n.prefix, n.filename))
 	if fh != nil {
 		if handle, ok := fh.(*CacheFileHandle); ok {
 			handle.mu.Lock()
-			handle.buf = content
 			attrCopy := *attr
 			handle.attr = &attrCopy
-			handle.dirty = false
+			handle.mode = attr.Mode
 			handle.mu.Unlock()
 		}
 	}

@@ -56,11 +56,11 @@ func TestPrefixLookupCreateReaddirAndUnlink(t *testing.T) {
 	}
 
 	names, err = readPrefixNames(dir)
-	if err != syscall.ENOENT {
-		t.Fatalf("Readdir after unlink err = %v, want ENOENT", err)
+	if err != nil {
+		t.Fatalf("Readdir after unlink err = %v, want nil", err)
 	}
-	if names != nil {
-		t.Fatalf("Readdir after unlink = %v, want nil", names)
+	if len(names) != 0 {
+		t.Fatalf("Readdir after unlink = %v, want empty", names)
 	}
 }
 

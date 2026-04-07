@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"slices"
 	"strconv"
 	"syscall"
 	"time"
@@ -56,7 +55,7 @@ func (n *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return nil, syscall.EIO
 	}
 
-	exists, err := n.prefixExists(name)
+	exists, err := n.cfs.Store.PrefixExists(name)
 	if err != nil {
 		return nil, gfs.ToErrno(err)
 	}
@@ -131,7 +130,7 @@ func (n *RootNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		return syscall.ENOTEMPTY
 	}
 
-	if err := n.cfs.Store.DeletePrefix(name); err != nil {
+	if err := n.cfs.Store.RemovePrefix(name); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0
 		}
@@ -205,14 +204,7 @@ func (n *RootNode) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errn
 }
 
 func (n *RootNode) prefixExists(name string) (bool, error) {
-	prefixes, err := n.cfs.Store.ListPrefixes()
-	if err != nil {
-		return false, err
-	}
-	if slices.Contains(prefixes, name) {
-		return true, nil
-	}
-	return false, nil
+	return n.cfs.Store.PrefixExists(name)
 }
 
 func (n *RootNode) newPrefixInode(ctx context.Context, name string) (child *gfs.Inode) {
