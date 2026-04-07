@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"syscall"
 	"testing"
 
 	"github.com/lch/cachefs/internal/meta"
@@ -260,5 +261,119 @@ func TestDeleteMissingFileReturnsNotExist(t *testing.T) {
 	}
 	if err := s.RemovePrefix("aa"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("RemovePrefix missing error = %v, want os.ErrNotExist", err)
+	}
+}
+
+func TestSubdirOperations(t *testing.T) {
+	s, _ := newStoreForTest(t)
+
+	if err := s.CreatePrefix("aa"); err != nil {
+		t.Fatalf("CreatePrefix: %v", err)
+	}
+	if err := s.CreateSubdir("aa", "foo"); err != nil {
+		t.Fatalf("CreateSubdir: %v", err)
+	}
+	if exists, err := s.SubdirExists("aa", "foo"); err != nil {
+		t.Fatalf("SubdirExists: %v", err)
+	} else if !exists {
+		t.Fatal("SubdirExists returned false for created subdir")
+	}
+
+	directFoo := []byte("direct")
+	if err := s.WriteFile("aa", "foo", directFoo, meta.DefaultFileMode); err != nil {
+		t.Fatalf("WriteFile foo: %v", err)
+	}
+
+	rootData := []byte("abcde")
+	if err := s.WriteFile("aa", "root.txt", rootData, meta.DefaultFileMode); err != nil {
+		t.Fatalf("WriteFile root.txt: %v", err)
+	}
+	rootMeta, err := s.GetMeta("aa", "root.txt")
+	if err != nil {
+		t.Fatalf("GetMeta root.txt: %v", err)
+	}
+
+	if err := s.WriteSubdirFile("aa", "foo", "bar", []byte("bar"), meta.DefaultFileMode); err != nil {
+		t.Fatalf("WriteSubdirFile bar: %v", err)
+	}
+	if err := s.WriteSubdirFile("aa", "foo", "baz", []byte("baz"), meta.DefaultFileMode); err != nil {
+		t.Fatalf("WriteSubdirFile baz: %v", err)
+	}
+
+	if got, err := s.ListFiles("aa"); err != nil {
+		t.Fatalf("ListFiles: %v", err)
+	} else if !reflect.DeepEqual(got, []string{"foo", "root.txt"}) {
+		t.Fatalf("ListFiles = %v, want [foo root.txt]", got)
+	}
+	if got, err := s.ListSubdirs("aa"); err != nil {
+		t.Fatalf("ListSubdirs: %v", err)
+	} else if !reflect.DeepEqual(got, []string{"foo"}) {
+		t.Fatalf("ListSubdirs = %v, want [foo]", got)
+	}
+	if got, err := s.ListSubdirEntries("aa", "foo"); err != nil {
+		t.Fatalf("ListSubdirEntries: %v", err)
+	} else if !reflect.DeepEqual(got, []string{"bar", "baz"}) {
+		t.Fatalf("ListSubdirEntries = %v, want [bar baz]", got)
+	}
+
+	if got, _, err := s.ReadFile("aa", "foo"); err != nil {
+		t.Fatalf("ReadFile foo: %v", err)
+	} else if !bytes.Equal(got, directFoo) {
+		t.Fatalf("ReadFile foo = %q, want %q", got, directFoo)
+	}
+	if got, _, err := s.ReadSubdirFile("aa", "foo", "bar"); err != nil {
+		t.Fatalf("ReadSubdirFile bar: %v", err)
+	} else if !bytes.Equal(got, []byte("bar")) {
+		t.Fatalf("ReadSubdirFile bar = %q, want %q", got, []byte("bar"))
+	}
+
+	if err := s.DeleteFile("aa", "root.txt"); err != nil {
+		t.Fatalf("DeleteFile root.txt: %v", err)
+	}
+	if err := s.WriteSubdirFile("aa", "foo", "reuse.bin", rootData, meta.DefaultFileMode); err != nil {
+		t.Fatalf("WriteSubdirFile reuse.bin: %v", err)
+	}
+	reuseMeta, err := s.GetSubdirFileMeta("aa", "foo", "reuse.bin")
+	if err != nil {
+		t.Fatalf("GetSubdirFileMeta reuse.bin: %v", err)
+	}
+	if reuseMeta.Offset != rootMeta.Offset {
+		t.Fatalf("reuse.bin offset = %d, want %d", reuseMeta.Offset, rootMeta.Offset)
+	}
+	if got, err := s.ListSubdirEntries("aa", "foo"); err != nil {
+		t.Fatalf("ListSubdirEntries after reuse: %v", err)
+	} else if !reflect.DeepEqual(got, []string{"bar", "baz", "reuse.bin"}) {
+		t.Fatalf("ListSubdirEntries after reuse = %v, want [bar baz reuse.bin]", got)
+	}
+
+	if err := s.RemoveSubdir("aa", "foo"); !errors.Is(err, syscall.ENOTEMPTY) {
+		t.Fatalf("RemoveSubdir non-empty error = %v, want ENOTEMPTY", err)
+	}
+	if err := s.DeleteSubdirFile("aa", "foo", "bar"); err != nil {
+		t.Fatalf("DeleteSubdirFile bar: %v", err)
+	}
+	if err := s.DeleteSubdirFile("aa", "foo", "baz"); err != nil {
+		t.Fatalf("DeleteSubdirFile baz: %v", err)
+	}
+	if err := s.DeleteSubdirFile("aa", "foo", "reuse.bin"); err != nil {
+		t.Fatalf("DeleteSubdirFile reuse.bin: %v", err)
+	}
+	if err := s.DeleteFile("aa", "foo"); err != nil {
+		t.Fatalf("DeleteFile foo: %v", err)
+	}
+
+	if err := s.RemovePrefix("aa"); !errors.Is(err, ErrPrefixNotEmpty) {
+		t.Fatalf("RemovePrefix with subdir marker error = %v, want ErrPrefixNotEmpty", err)
+	}
+	if err := s.RemoveSubdir("aa", "foo"); err != nil {
+		t.Fatalf("RemoveSubdir empty: %v", err)
+	}
+	if exists, err := s.SubdirExists("aa", "foo"); err != nil {
+		t.Fatalf("SubdirExists after remove: %v", err)
+	} else if exists {
+		t.Fatal("SubdirExists returned true after RemoveSubdir")
+	}
+	if err := s.RemovePrefix("aa"); err != nil {
+		t.Fatalf("RemovePrefix after subdir removal: %v", err)
 	}
 }

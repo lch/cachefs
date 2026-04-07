@@ -17,6 +17,7 @@ import (
 type CacheFileHandle struct {
 	cfs      *CacheFS
 	prefix   string
+	subdir   string
 	filename string
 	attr     *meta.FileAttr
 	mode     uint32
@@ -24,6 +25,34 @@ type CacheFileHandle struct {
 	mu    sync.Mutex
 	buf   []byte
 	dirty bool
+}
+
+func (h *CacheFileHandle) stableIno() uint64 {
+	if h.subdir == "" {
+		return fileIno(h.prefix, h.filename)
+	}
+	return subdirFileIno(h.prefix, h.subdir, h.filename)
+}
+
+func (h *CacheFileHandle) getMeta() (*meta.FileAttr, error) {
+	if h.subdir == "" {
+		return h.cfs.Store.GetMeta(h.prefix, h.filename)
+	}
+	return h.cfs.Store.GetSubdirFileMeta(h.prefix, h.subdir, h.filename)
+}
+
+func (h *CacheFileHandle) updateMeta(attr *meta.FileAttr) error {
+	if h.subdir == "" {
+		return h.cfs.Store.UpdateMeta(h.prefix, h.filename, attr)
+	}
+	return h.cfs.Store.UpdateSubdirFileMeta(h.prefix, h.subdir, h.filename, attr)
+}
+
+func (h *CacheFileHandle) writeBuf(buf []byte, mode uint32) error {
+	if h.subdir == "" {
+		return h.cfs.Store.WriteFile(h.prefix, h.filename, buf, mode)
+	}
+	return h.cfs.Store.WriteSubdirFile(h.prefix, h.subdir, h.filename, buf, mode)
 }
 
 var (
@@ -75,11 +104,11 @@ func (h *CacheFileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscal
 		attr = *h.attr
 		h.mu.Unlock()
 		attr.Length = size
-		fillFileAttrOut(out, h.cfs, &attr, fileIno(h.prefix, h.filename))
+		fillFileAttrOut(out, h.cfs, &attr, h.stableIno())
 		return 0
 	} else {
 		h.mu.Unlock()
-		loaded, err := h.cfs.Store.GetMeta(h.prefix, h.filename)
+		loaded, err := h.getMeta()
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return syscall.ENOENT
@@ -89,7 +118,7 @@ func (h *CacheFileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscal
 		attr = *loaded
 	}
 	attr.Length = size
-	fillFileAttrOut(out, h.cfs, &attr, fileIno(h.prefix, h.filename))
+	fillFileAttrOut(out, h.cfs, &attr, h.stableIno())
 	return 0
 }
 
@@ -119,7 +148,7 @@ func (h *CacheFileHandle) Write(ctx context.Context, data []byte, off int64) (ui
 	copy(newBuf, h.buf)
 	copy(newBuf[int(off):], data)
 
-	loaded, err := h.cfs.Store.GetMeta(h.prefix, h.filename)
+	loaded, err := h.getMeta()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, syscall.ENOENT
@@ -128,13 +157,13 @@ func (h *CacheFileHandle) Write(ctx context.Context, data []byte, off int64) (ui
 	}
 	h.mode = loaded.Mode
 
-	if err := h.cfs.Store.WriteFile(h.prefix, h.filename, newBuf, h.mode); err != nil {
+	if err := h.writeBuf(newBuf, h.mode); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, syscall.ENOENT
 		}
 		return 0, gfs.ToErrno(err)
 	}
-	loaded, err = h.cfs.Store.GetMeta(h.prefix, h.filename)
+	loaded, err = h.getMeta()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, syscall.ENOENT
@@ -162,7 +191,7 @@ func (h *CacheFileHandle) Flush(ctx context.Context) syscall.Errno {
 		return 0
 	}
 
-	loaded, err := h.cfs.Store.GetMeta(h.prefix, h.filename)
+	loaded, err := h.getMeta()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return syscall.ENOENT
@@ -171,14 +200,14 @@ func (h *CacheFileHandle) Flush(ctx context.Context) syscall.Errno {
 	}
 	h.mode = loaded.Mode
 
-	if err := h.cfs.Store.WriteFile(h.prefix, h.filename, h.buf, h.mode); err != nil {
+	if err := h.writeBuf(h.buf, h.mode); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return syscall.ENOENT
 		}
 		return gfs.ToErrno(err)
 	}
 
-	attr, err := h.cfs.Store.GetMeta(h.prefix, h.filename)
+	attr, err := h.getMeta()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return syscall.ENOENT
@@ -202,12 +231,12 @@ func (h *CacheFileHandle) touchAtime() error {
 		return nil
 	}
 
-	attr, err := h.cfs.Store.GetMeta(h.prefix, h.filename)
+	attr, err := h.getMeta()
 	if err != nil {
 		return err
 	}
 	attr.Atime = time.Now().Unix()
-	if err := h.cfs.Store.UpdateMeta(h.prefix, h.filename, attr); err != nil {
+	if err := h.updateMeta(attr); err != nil {
 		return err
 	}
 	h.mu.Lock()

@@ -8,6 +8,7 @@ import (
 
 	gfs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/lch/cachefs/internal/meta"
 )
 
 // FileNode represents a cached regular file inside a prefix directory.
@@ -15,7 +16,65 @@ type FileNode struct {
 	gfs.Inode
 	cfs      *CacheFS
 	prefix   string
+	subdir   string
 	filename string
+}
+
+func (n *FileNode) stableIno() uint64 {
+	if n.subdir == "" {
+		return fileIno(n.prefix, n.filename)
+	}
+	return subdirFileIno(n.prefix, n.subdir, n.filename)
+}
+
+func (n *FileNode) readData() ([]byte, *meta.FileAttr, error) {
+	if n.subdir == "" {
+		return n.cfs.Store.ReadFile(n.prefix, n.filename)
+	}
+	return n.cfs.Store.ReadSubdirFile(n.prefix, n.subdir, n.filename)
+}
+
+func (n *FileNode) getMeta() (*meta.FileAttr, error) {
+	if n.subdir == "" {
+		return n.cfs.Store.GetMeta(n.prefix, n.filename)
+	}
+	return n.cfs.Store.GetSubdirFileMeta(n.prefix, n.subdir, n.filename)
+}
+
+func (n *FileNode) updateMeta(attr *meta.FileAttr) error {
+	if n.subdir == "" {
+		return n.cfs.Store.UpdateMeta(n.prefix, n.filename, attr)
+	}
+	return n.cfs.Store.UpdateSubdirFileMeta(n.prefix, n.subdir, n.filename, attr)
+}
+
+func (n *FileNode) truncate(size uint64) error {
+	if n.subdir == "" {
+		return n.cfs.Store.Truncate(n.prefix, n.filename, size)
+	}
+	return n.cfs.Store.TruncateSubdirFile(n.prefix, n.subdir, n.filename, size)
+}
+
+func (n *FileNode) newHandle(data []byte, attr *meta.FileAttr) *CacheFileHandle {
+	if attr == nil {
+		return nil
+	}
+	attrCopy := *attr
+	return &CacheFileHandle{
+		cfs:      n.cfs,
+		prefix:   n.prefix,
+		subdir:   n.subdir,
+		filename: n.filename,
+		attr:     &attrCopy,
+		mode:     attr.Mode,
+		buf:      data,
+	}
+}
+
+func (n *FileNode) updatePath(prefix, subdir, filename string) {
+	n.prefix = prefix
+	n.subdir = subdir
+	n.filename = filename
 }
 
 func (n *FileNode) Open(ctx context.Context, flags uint32) (gfs.FileHandle, uint32, syscall.Errno) {
@@ -23,23 +82,14 @@ func (n *FileNode) Open(ctx context.Context, flags uint32) (gfs.FileHandle, uint
 		return nil, 0, syscall.EIO
 	}
 
-	data, attr, err := n.cfs.Store.ReadFile(n.prefix, n.filename)
+	data, attr, err := n.readData()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, 0, syscall.ENOENT
 		}
 		return nil, 0, gfs.ToErrno(err)
 	}
-	attrCopy := *attr
-
-	h := &CacheFileHandle{
-		cfs:      n.cfs,
-		prefix:   n.prefix,
-		filename: n.filename,
-		attr:     &attrCopy,
-		mode:     attr.Mode,
-		buf:      data,
-	}
+	h := n.newHandle(data, attr)
 	return h, fuse.FOPEN_KEEP_CACHE, 0
 }
 
@@ -51,7 +101,7 @@ func (n *FileNode) Getattr(ctx context.Context, fh gfs.FileHandle, out *fuse.Att
 		return handle.Getattr(ctx, out)
 	}
 
-	attr, err := n.cfs.Store.GetMeta(n.prefix, n.filename)
+	attr, err := n.getMeta()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return syscall.ENOENT
@@ -59,7 +109,7 @@ func (n *FileNode) Getattr(ctx context.Context, fh gfs.FileHandle, out *fuse.Att
 		return gfs.ToErrno(err)
 	}
 
-	fillFileAttrOut(out, n.cfs, attr, fileIno(n.prefix, n.filename))
+	fillFileAttrOut(out, n.cfs, attr, n.stableIno())
 	return 0
 }
 
@@ -68,7 +118,7 @@ func (n *FileNode) Setattr(ctx context.Context, fh gfs.FileHandle, in *fuse.SetA
 		return syscall.EIO
 	}
 
-	attr, err := n.cfs.Store.GetMeta(n.prefix, n.filename)
+	attr, err := n.getMeta()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return syscall.ENOENT
@@ -77,7 +127,7 @@ func (n *FileNode) Setattr(ctx context.Context, fh gfs.FileHandle, in *fuse.SetA
 	}
 
 	if size, ok := in.GetSize(); ok {
-		if err := n.cfs.Store.Truncate(n.prefix, n.filename, size); err != nil {
+		if err := n.truncate(size); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return syscall.ENOENT
 			}
@@ -89,7 +139,7 @@ func (n *FileNode) Setattr(ctx context.Context, fh gfs.FileHandle, in *fuse.SetA
 			handle.mode = attr.Mode
 			handle.mu.Unlock()
 		}
-		attr, err = n.cfs.Store.GetMeta(n.prefix, n.filename)
+		attr, err = n.getMeta()
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return syscall.ENOENT
@@ -125,7 +175,7 @@ func (n *FileNode) Setattr(ctx context.Context, fh gfs.FileHandle, in *fuse.SetA
 		changed = true
 	}
 	if changed {
-		if err := n.cfs.Store.UpdateMeta(n.prefix, n.filename, &updated); err != nil {
+		if err := n.updateMeta(&updated); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return syscall.ENOENT
 			}
@@ -134,7 +184,7 @@ func (n *FileNode) Setattr(ctx context.Context, fh gfs.FileHandle, in *fuse.SetA
 		attr = &updated
 	}
 
-	fillFileAttrOut(out, n.cfs, attr, fileIno(n.prefix, n.filename))
+	fillFileAttrOut(out, n.cfs, attr, n.stableIno())
 	if fh != nil {
 		if handle, ok := fh.(*CacheFileHandle); ok {
 			handle.mu.Lock()

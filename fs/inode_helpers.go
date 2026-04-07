@@ -27,6 +27,25 @@ func fileIno(prefix, name string) uint64 {
 	return h.Sum64() | (1 << 63)
 }
 
+func subdirFileIno(prefix, dirname, name string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(prefix))
+	_, _ = h.Write([]byte{'/'})
+	_, _ = h.Write([]byte(dirname))
+	_, _ = h.Write([]byte{'/'})
+	_, _ = h.Write([]byte(name))
+	return h.Sum64() | (1 << 63)
+}
+
+func subdirIno(prefix, dirname string) uint64 {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte("dir:"))
+	_, _ = h.Write([]byte(prefix))
+	_, _ = h.Write([]byte{'/'})
+	_, _ = h.Write([]byte(dirname))
+	return h.Sum64() | (1 << 62)
+}
+
 func fillFileEntryOut(out *fuse.EntryOut, cfs *CacheFS, attr *meta.FileAttr, ino uint64) {
 	if out == nil || cfs == nil || attr == nil {
 		return

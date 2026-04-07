@@ -3,6 +3,7 @@ package meta
 import (
 	"encoding/binary"
 	"fmt"
+	"syscall"
 )
 
 const SerializedSize = 52
@@ -22,6 +23,14 @@ type FileAttr struct {
 	Atime  int64
 	Mtime  int64
 	Ctime  int64
+}
+
+// IsDir reports whether the attr represents a directory entry.
+func (a *FileAttr) IsDir() bool {
+	if a == nil {
+		return false
+	}
+	return a.Mode&syscall.S_IFMT == syscall.S_IFDIR
 }
 
 // Marshal encodes attr into the fixed 52-byte little-endian layout.

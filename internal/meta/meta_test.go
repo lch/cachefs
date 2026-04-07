@@ -1,6 +1,9 @@
 package meta
 
-import "testing"
+import (
+	"syscall"
+	"testing"
+)
 
 func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 	original := &FileAttr{
@@ -26,6 +29,30 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 
 	if *got != *original {
 		t.Fatalf("round-trip mismatch:\n got: %#v\nwant: %#v", got, original)
+	}
+}
+
+func TestMarshalUnmarshalDirectoryRoundTrip(t *testing.T) {
+	original := &FileAttr{
+		Mode: syscall.S_IFDIR | DefaultDirMode,
+	}
+
+	data := Marshal(original)
+	if len(data) != SerializedSize {
+		t.Fatalf("Marshal length = %d, want %d", len(data), SerializedSize)
+	}
+
+	got, err := Unmarshal(data)
+	if err != nil {
+		t.Fatalf("Unmarshal returned error: %v", err)
+	}
+
+	if *got != *original {
+		t.Fatalf("round-trip mismatch:\n got: %#v\nwant: %#v", got, original)
+	}
+
+	if !got.IsDir() {
+		t.Fatal("IsDir returned false for directory attr")
 	}
 }
 

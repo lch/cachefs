@@ -7,7 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/lch/cachefs/blob"
@@ -115,8 +117,8 @@ func (s *bboltBlobStore) Close() error {
 	return errors.Join(errs...)
 }
 
-func (s *bboltBlobStore) ReadFile(prefix, filename string) ([]byte, *meta.FileAttr, error) {
-	attr, err := s.GetMeta(prefix, filename)
+func (s *bboltBlobStore) readFileByKey(prefix, key string) ([]byte, *meta.FileAttr, error) {
+	attr, err := s.getMetaByKey(prefix, key)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -131,7 +133,7 @@ func (s *bboltBlobStore) ReadFile(prefix, filename string) ([]byte, *meta.FileAt
 	return data, attr, nil
 }
 
-func (s *bboltBlobStore) WriteFile(prefix, filename string, data []byte, mode uint32) (err error) {
+func (s *bboltBlobStore) writeFileByKey(prefix, key string, data []byte, mode uint32) (err error) {
 	if s == nil || s.db == nil {
 		return errors.New("store: nil db")
 	}
@@ -141,7 +143,7 @@ func (s *bboltBlobStore) WriteFile(prefix, filename string, data []byte, mode ui
 
 	var existingAttr *meta.FileAttr
 	var existingData []byte
-	if existingAttr, err = s.GetMeta(prefix, filename); err != nil {
+	if existingAttr, err = s.getMetaByKey(prefix, key); err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -162,10 +164,10 @@ func (s *bboltBlobStore) WriteFile(prefix, filename string, data []byte, mode ui
 		localFl.Free(existingAttr.Offset, existingAttr.Length)
 	}
 
-	return s.replaceFileLocked(prefix, filename, data, mode, existingAttr, existingData, localFl)
+	return s.replaceFileLocked(prefix, key, data, mode, existingAttr, existingData, localFl)
 }
 
-func (s *bboltBlobStore) DeleteFile(prefix, filename string) (err error) {
+func (s *bboltBlobStore) deleteFileByKey(prefix, key string) error {
 	if s == nil || s.db == nil {
 		return errors.New("store: nil db")
 	}
@@ -173,7 +175,7 @@ func (s *bboltBlobStore) DeleteFile(prefix, filename string) (err error) {
 	s.flMu.Lock()
 	defer s.flMu.Unlock()
 
-	attr, err := s.GetMeta(prefix, filename)
+	attr, err := s.getMetaByKey(prefix, key)
 	if err != nil {
 		return err
 	}
@@ -189,13 +191,13 @@ func (s *bboltBlobStore) DeleteFile(prefix, filename string) (err error) {
 	err = s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte(prefix))
 		if bucket == nil {
-			return notFound("file", prefix, filename)
+			return notFound("file", prefix, key)
 		}
-		key := []byte(filename)
-		if !hasKey(bucket, key) {
-			return notFound("file", prefix, filename)
+		k := []byte(key)
+		if !hasKey(bucket, k) {
+			return notFound("file", prefix, key)
 		}
-		if err := bucket.Delete(key); err != nil {
+		if err := bucket.Delete(k); err != nil {
 			return err
 		}
 		return persistFreeList(tx, prefix, localFl)
@@ -206,16 +208,16 @@ func (s *bboltBlobStore) DeleteFile(prefix, filename string) (err error) {
 	return err
 }
 
-func (s *bboltBlobStore) GetMeta(prefix, filename string) (*meta.FileAttr, error) {
+func (s *bboltBlobStore) getMetaByKey(prefix, key string) (*meta.FileAttr, error) {
 	var out *meta.FileAttr
 	if err := s.view(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte(prefix))
 		if bucket == nil {
-			return notFound("file", prefix, filename)
+			return notFound("file", prefix, key)
 		}
-		data := bucket.Get([]byte(filename))
+		data := bucket.Get([]byte(key))
 		if data == nil {
-			return notFound("file", prefix, filename)
+			return notFound("file", prefix, key)
 		}
 		attr, err := meta.Unmarshal(copyBytes(data))
 		if err != nil {
@@ -229,7 +231,7 @@ func (s *bboltBlobStore) GetMeta(prefix, filename string) (*meta.FileAttr, error
 	return out, nil
 }
 
-func (s *bboltBlobStore) UpdateMeta(prefix, filename string, attr *meta.FileAttr) error {
+func (s *bboltBlobStore) updateMetaByKey(prefix, key string, attr *meta.FileAttr) error {
 	if attr == nil {
 		return errors.New("store: nil meta attr")
 	}
@@ -240,17 +242,17 @@ func (s *bboltBlobStore) UpdateMeta(prefix, filename string, attr *meta.FileAttr
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		bucket := tx.Bucket([]byte(prefix))
 		if bucket == nil {
-			return notFound("file", prefix, filename)
+			return notFound("file", prefix, key)
 		}
-		key := []byte(filename)
-		if !hasKey(bucket, key) {
-			return notFound("file", prefix, filename)
+		k := []byte(key)
+		if !hasKey(bucket, k) {
+			return notFound("file", prefix, key)
 		}
-		return bucket.Put(key, meta.Marshal(attr))
+		return bucket.Put(k, meta.Marshal(attr))
 	})
 }
 
-func (s *bboltBlobStore) Truncate(prefix, filename string, newSize uint64) error {
+func (s *bboltBlobStore) truncateFileByKey(prefix, key string, newSize uint64) error {
 	if s == nil || s.db == nil {
 		return errors.New("store: nil db")
 	}
@@ -258,7 +260,7 @@ func (s *bboltBlobStore) Truncate(prefix, filename string, newSize uint64) error
 	s.flMu.Lock()
 	defer s.flMu.Unlock()
 
-	currentData, currentAttr, err := s.ReadFile(prefix, filename)
+	currentData, currentAttr, err := s.readFileByKey(prefix, key)
 	if err != nil {
 		return err
 	}
@@ -272,7 +274,138 @@ func (s *bboltBlobStore) Truncate(prefix, filename string, newSize uint64) error
 		localFl.Free(currentAttr.Offset, currentAttr.Length)
 	}
 
-	return s.replaceFileLocked(prefix, filename, resized, currentAttr.Mode, currentAttr, currentData, localFl)
+	return s.replaceFileLocked(prefix, key, resized, currentAttr.Mode, currentAttr, currentData, localFl)
+}
+
+func (s *bboltBlobStore) createSubdir(prefix, dirname string) error {
+	if s == nil || s.db == nil {
+		return errors.New("store: nil db")
+	}
+
+	markerKey := []byte(meta.SubdirMarkerKey(dirname))
+	attr := buildFileAttr(nil, syscall.S_IFDIR|meta.DefaultDirMode, 0, 0)
+
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket, err := tx.CreateBucketIfNotExists([]byte(prefix))
+		if err != nil {
+			return err
+		}
+		if hasKey(bucket, markerKey) {
+			return fmt.Errorf("store: subdir %q/%q: %w", prefix, dirname, os.ErrExist)
+		}
+		return bucket.Put(markerKey, meta.Marshal(attr))
+	})
+}
+
+func (s *bboltBlobStore) removeSubdir(prefix, dirname string) error {
+	if s == nil || s.db == nil {
+		return errors.New("store: nil db")
+	}
+
+	markerKey := []byte(meta.SubdirMarkerKey(dirname))
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(prefix))
+		if bucket == nil {
+			return notFound("subdir", prefix, dirname)
+		}
+		if !hasKey(bucket, markerKey) {
+			return notFound("subdir", prefix, dirname)
+		}
+		cursor := bucket.Cursor()
+		for k, _ := cursor.Seek(markerKey); k != nil && bytes.HasPrefix(k, markerKey); k, _ = cursor.Next() {
+			if !bytes.Equal(k, markerKey) {
+				return syscall.ENOTEMPTY
+			}
+		}
+		return bucket.Delete(markerKey)
+	})
+}
+
+func (s *bboltBlobStore) subdirExists(prefix, dirname string) (bool, error) {
+	var exists bool
+	if err := s.view(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(prefix))
+		if bucket == nil {
+			exists = false
+			return nil
+		}
+		exists = hasKey(bucket, []byte(meta.SubdirMarkerKey(dirname)))
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (s *bboltBlobStore) listSubdirEntries(prefix, dirname string) ([]string, error) {
+	entries := make([]string, 0)
+	if err := s.view(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(prefix))
+		if bucket == nil {
+			return notFound("subdir", prefix, dirname)
+		}
+		markerKey := []byte(meta.SubdirMarkerKey(dirname))
+		if !hasKey(bucket, markerKey) {
+			return notFound("subdir", prefix, dirname)
+		}
+		cursor := bucket.Cursor()
+		for k, _ := cursor.Seek(markerKey); k != nil && bytes.HasPrefix(k, markerKey); k, _ = cursor.Next() {
+			suffix := string(k[len(markerKey):])
+			if suffix == "" || strings.Contains(suffix, "/") {
+				continue
+			}
+			entries = append(entries, suffix)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	sort.Strings(entries)
+	return entries, nil
+}
+
+func (s *bboltBlobStore) listSubdirs(prefix string) ([]string, error) {
+	subdirs := make([]string, 0)
+	if err := s.view(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(prefix))
+		if bucket == nil {
+			return notFound("prefix", prefix, "")
+		}
+		return bucket.ForEach(func(name, _ []byte) error {
+			if meta.IsSubdirMarker(string(name)) {
+				subdirs = append(subdirs, strings.TrimSuffix(string(name), "/"))
+			}
+			return nil
+		})
+	}); err != nil {
+		return nil, err
+	}
+	sort.Strings(subdirs)
+	return subdirs, nil
+}
+
+func (s *bboltBlobStore) ReadFile(prefix, filename string) ([]byte, *meta.FileAttr, error) {
+	return s.readFileByKey(prefix, filename)
+}
+
+func (s *bboltBlobStore) WriteFile(prefix, filename string, data []byte, mode uint32) (err error) {
+	return s.writeFileByKey(prefix, filename, data, mode)
+}
+
+func (s *bboltBlobStore) DeleteFile(prefix, filename string) (err error) {
+	return s.deleteFileByKey(prefix, filename)
+}
+
+func (s *bboltBlobStore) GetMeta(prefix, filename string) (*meta.FileAttr, error) {
+	return s.getMetaByKey(prefix, filename)
+}
+
+func (s *bboltBlobStore) UpdateMeta(prefix, filename string, attr *meta.FileAttr) error {
+	return s.updateMetaByKey(prefix, filename, attr)
+}
+
+func (s *bboltBlobStore) Truncate(prefix, filename string, newSize uint64) error {
+	return s.truncateFileByKey(prefix, filename, newSize)
 }
 
 func (s *bboltBlobStore) ListPrefixes() ([]string, error) {
@@ -306,7 +439,9 @@ func (s *bboltBlobStore) ListFiles(prefix string) ([]string, error) {
 			return notFound("prefix", prefix, "")
 		}
 		return bucket.ForEach(func(name, _ []byte) error {
-			files = append(files, string(name))
+			if !strings.Contains(string(name), "/") {
+				files = append(files, string(name))
+			}
 			return nil
 		})
 	}); err != nil {
@@ -314,6 +449,10 @@ func (s *bboltBlobStore) ListFiles(prefix string) ([]string, error) {
 	}
 	sort.Strings(files)
 	return files, nil
+}
+
+func (s *bboltBlobStore) ListSubdirs(prefix string) ([]string, error) {
+	return s.listSubdirs(prefix)
 }
 
 func (s *bboltBlobStore) CreatePrefix(prefix string) error {
@@ -340,15 +479,14 @@ func (s *bboltBlobStore) RemovePrefix(prefix string) error {
 	s.flMu.Lock()
 	defer s.flMu.Unlock()
 
-	files, err := s.ListFiles(prefix)
-	if err != nil {
-		return err
-	}
-	if len(files) != 0 {
-		return fmt.Errorf("store: prefix %q: %w", prefix, ErrPrefixNotEmpty)
-	}
-
 	if err := s.db.Update(func(tx *bbolt.Tx) error {
+		bucket := tx.Bucket([]byte(prefix))
+		if bucket == nil {
+			return fmt.Errorf("store: prefix %q: %w", prefix, os.ErrNotExist)
+		}
+		if k, _ := bucket.Cursor().First(); k != nil {
+			return fmt.Errorf("store: prefix %q: %w", prefix, ErrPrefixNotEmpty)
+		}
 		if err := tx.DeleteBucket([]byte(prefix)); err != nil {
 			if errors.Is(err, berrors.ErrBucketNotFound) {
 				return fmt.Errorf("store: prefix %q: %w", prefix, os.ErrNotExist)
@@ -376,6 +514,46 @@ func (s *bboltBlobStore) PrefixExists(prefix string) (bool, error) {
 		return false, err
 	}
 	return exists, nil
+}
+
+func (s *bboltBlobStore) CreateSubdir(prefix, dirname string) error {
+	return s.createSubdir(prefix, dirname)
+}
+
+func (s *bboltBlobStore) RemoveSubdir(prefix, dirname string) error {
+	return s.removeSubdir(prefix, dirname)
+}
+
+func (s *bboltBlobStore) SubdirExists(prefix, dirname string) (bool, error) {
+	return s.subdirExists(prefix, dirname)
+}
+
+func (s *bboltBlobStore) ListSubdirEntries(prefix, dirname string) ([]string, error) {
+	return s.listSubdirEntries(prefix, dirname)
+}
+
+func (s *bboltBlobStore) ReadSubdirFile(prefix, dirname, filename string) ([]byte, *meta.FileAttr, error) {
+	return s.readFileByKey(prefix, meta.SubdirFileKey(dirname, filename))
+}
+
+func (s *bboltBlobStore) WriteSubdirFile(prefix, dirname, filename string, data []byte, mode uint32) error {
+	return s.writeFileByKey(prefix, meta.SubdirFileKey(dirname, filename), data, mode)
+}
+
+func (s *bboltBlobStore) DeleteSubdirFile(prefix, dirname, filename string) error {
+	return s.deleteFileByKey(prefix, meta.SubdirFileKey(dirname, filename))
+}
+
+func (s *bboltBlobStore) GetSubdirFileMeta(prefix, dirname, filename string) (*meta.FileAttr, error) {
+	return s.getMetaByKey(prefix, meta.SubdirFileKey(dirname, filename))
+}
+
+func (s *bboltBlobStore) UpdateSubdirFileMeta(prefix, dirname, filename string, attr *meta.FileAttr) error {
+	return s.updateMetaByKey(prefix, meta.SubdirFileKey(dirname, filename), attr)
+}
+
+func (s *bboltBlobStore) TruncateSubdirFile(prefix, dirname, filename string, newSize uint64) error {
+	return s.truncateFileByKey(prefix, meta.SubdirFileKey(dirname, filename), newSize)
 }
 
 func (s *bboltBlobStore) cloneFreeList(prefix string) (*blob.FreeList, error) {
