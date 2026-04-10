@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 
+	"syscall"
+
 	"github.com/lch/cachefs/blob"
 	"github.com/lch/cachefs/internal/meta"
 	"go.etcd.io/bbolt"
@@ -100,7 +102,13 @@ func (s *boltDBBlobStore) Write(path string, data []byte, mode uint32) error {
 		}
 	}
 
-	err = s.blobs.Write(p.Prefix, blocks, data)
+	paddedData := data
+	if len(data) < neededBlocks*meta.DefaultBlockSize {
+		paddedData = make([]byte, neededBlocks*meta.DefaultBlockSize)
+		copy(paddedData, data)
+	}
+
+	err = s.blobs.Write(p.Prefix, blocks, paddedData)
 	if err != nil {
 		return err
 	}
@@ -152,7 +160,7 @@ func (s *boltDBBlobStore) GetMeta(path string) (*meta.FileAttr, error) {
 
 	if p.Kind == meta.PathIsRootFolder {
 		return &meta.FileAttr{
-			Mode: uint32(os.ModeDir) | 0o755,
+			Mode: uint32(syscall.S_IFDIR) | 0o755,
 		}, nil
 	}
 
@@ -167,7 +175,7 @@ func (s *boltDBBlobStore) GetMeta(path string) (*meta.FileAttr, error) {
 				return notFound("prefix", path)
 			}
 			attr = &meta.FileAttr{
-				Mode: uint32(os.ModeDir) | 0o755,
+				Mode: uint32(syscall.S_IFDIR) | 0o755,
 			}
 			return nil
 		}
@@ -337,7 +345,7 @@ func (s *boltDBBlobStore) Create(path string) error {
 		Mode: meta.DefaultFileMode,
 	}
 	if p.Kind == meta.PathIsSubFolder {
-		attr.Mode = uint32(os.ModeDir) | meta.DefaultDirMode
+		attr.Mode = uint32(syscall.S_IFDIR) | meta.DefaultDirMode
 	}
 	return s.UpdateMeta(path, attr)
 }
