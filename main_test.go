@@ -229,7 +229,7 @@ func TestIntegrationBlobBackedArchitecture(t *testing.T) {
 			mustMkdir(t, prefix)
 			mustWriteFile(t, file, payload)
 
-			attr, err := st.GetMeta("aa", "blob.txt")
+			attr, err := st.GetMeta("aa/blob.txt")
 			if err != nil {
 				t.Fatalf("GetMeta: %v", err)
 			}
@@ -258,13 +258,13 @@ func TestIntegrationBlobBackedArchitecture(t *testing.T) {
 
 			mustMkdir(t, prefix)
 			mustWriteFile(t, first, payload)
-			firstMeta, err := st.GetMeta("aa", "first.bin")
+			firstMeta, err := st.GetMeta("aa/first.bin")
 			if err != nil {
 				t.Fatalf("GetMeta first: %v", err)
 			}
 			mustRemove(t, first)
 			mustWriteFile(t, second, payload)
-			secondMeta, err := st.GetMeta("aa", "second.bin")
+			secondMeta, err := st.GetMeta("aa/second.bin")
 			if err != nil {
 				t.Fatalf("GetMeta second: %v", err)
 			}
@@ -287,15 +287,15 @@ func TestIntegrationBlobBackedArchitecture(t *testing.T) {
 			mustWriteFile(t, filepath.Join(prefix, "b.bin"), payloadB)
 			mustWriteFile(t, filepath.Join(prefix, "c.bin"), payloadC)
 
-			aMeta, err := st.GetMeta("aa", "a.bin")
+			aMeta, err := st.GetMeta("aa/a.bin")
 			if err != nil {
 				t.Fatalf("GetMeta a: %v", err)
 			}
-			bMeta, err := st.GetMeta("aa", "b.bin")
+			bMeta, err := st.GetMeta("aa/b.bin")
 			if err != nil {
 				t.Fatalf("GetMeta b: %v", err)
 			}
-			cMeta, err := st.GetMeta("aa", "c.bin")
+			cMeta, err := st.GetMeta("aa/c.bin")
 			if err != nil {
 				t.Fatalf("GetMeta c: %v", err)
 			}

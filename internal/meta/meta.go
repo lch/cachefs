@@ -1,28 +1,29 @@
 package meta
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"syscall"
 )
 
-const SerializedSize = 52
-
 const (
-	DefaultFileMode uint32 = 0o644
-	DefaultDirMode  uint32 = 0o755
+	DefaultBlockSize        = 4096
+	DefaultFileMode  uint32 = 0o644
+	DefaultDirMode   uint32 = 0o755
 )
 
 // FileAttr stores the serializable metadata for a cached file or directory.
 type FileAttr struct {
-	Offset uint64
-	Length uint64
-	Mode   uint32
-	Uid    uint32
-	Gid    uint32
-	Atime  int64
-	Mtime  int64
-	Ctime  int64
+	Mode         uint32
+	Uid          uint32
+	Gid          uint32
+	Atime        int64
+	Mtime        int64
+	Ctime        int64
+	Length       uint64
+	Blocks       uint64
+	BlockIndices []uint64
 }
 
 // IsDir reports whether the attr represents a directory entry.
@@ -33,38 +34,99 @@ func (a *FileAttr) IsDir() bool {
 	return a.Mode&syscall.S_IFMT == syscall.S_IFDIR
 }
 
-// Marshal encodes attr into the fixed 52-byte little-endian layout.
-func Marshal(attr *FileAttr) []byte {
-	if attr == nil {
-		return nil
+// MarshalBinary encodes attr into a little-endian layout.
+func (a *FileAttr) MarshalBinary() (data []byte, err error) {
+	if a == nil {
+		return nil, fmt.Errorf("meta: uninitialized FileAttr")
 	}
-
-	buf := make([]byte, SerializedSize)
-	binary.LittleEndian.PutUint64(buf[0:8], attr.Offset)
-	binary.LittleEndian.PutUint64(buf[8:16], attr.Length)
-	binary.LittleEndian.PutUint32(buf[16:20], attr.Mode)
-	binary.LittleEndian.PutUint32(buf[20:24], attr.Uid)
-	binary.LittleEndian.PutUint32(buf[24:28], attr.Gid)
-	binary.LittleEndian.PutUint64(buf[28:36], uint64(attr.Atime))
-	binary.LittleEndian.PutUint64(buf[36:44], uint64(attr.Mtime))
-	binary.LittleEndian.PutUint64(buf[44:52], uint64(attr.Ctime))
-	return buf
+	data = binary.LittleEndian.AppendUint32(data, a.Mode)
+	data = binary.LittleEndian.AppendUint32(data, a.Uid)
+	data = binary.LittleEndian.AppendUint32(data, a.Gid)
+	data = binary.LittleEndian.AppendUint64(data, uint64(a.Atime))
+	data = binary.LittleEndian.AppendUint64(data, uint64(a.Mtime))
+	data = binary.LittleEndian.AppendUint64(data, uint64(a.Ctime))
+	data = binary.LittleEndian.AppendUint64(data, a.Length)
+	data = binary.LittleEndian.AppendUint64(data, a.Blocks)
+	for _, v := range a.BlockIndices {
+		data = binary.LittleEndian.AppendUint64(data, v)
+	}
+	return
 }
 
-// Unmarshal decodes a 52-byte little-endian FileAttr value.
-func Unmarshal(data []byte) (*FileAttr, error) {
-	if len(data) != SerializedSize {
-		return nil, fmt.Errorf("meta: expected %d bytes, got %d", SerializedSize, len(data))
+// UnmarshalBinary decodes a little-endian FileAttr value.
+func (a *FileAttr) UnmarshalBinary(data []byte) error {
+	buf := bytes.NewBuffer(data)
+	if err := binary.Read(buf, binary.LittleEndian, &a.Mode); err != nil {
+		return err
 	}
+	if err := binary.Read(buf, binary.LittleEndian, &a.Uid); err != nil {
+		return err
+	}
+	if err := binary.Read(buf, binary.LittleEndian, &a.Gid); err != nil {
+		return err
+	}
+	var atime uint64
+	if err := binary.Read(buf, binary.LittleEndian, &atime); err != nil {
+		return err
+	}
+	a.Atime = int64(atime)
+	var mtime uint64
+	if err := binary.Read(buf, binary.LittleEndian, &mtime); err != nil {
+		return err
+	}
+	a.Mtime = int64(mtime)
+	var ctime uint64
+	if err := binary.Read(buf, binary.LittleEndian, &ctime); err != nil {
+		return err
+	}
+	a.Ctime = int64(ctime)
+	if err := binary.Read(buf, binary.LittleEndian, &a.Length); err != nil {
+		return err
+	}
+	if err := binary.Read(buf, binary.LittleEndian, &a.Blocks); err != nil {
+		return err
+	}
+	var blockIndices []uint64
+	for range a.Blocks {
+		var blockIndex uint64
+		if err := binary.Read(buf, binary.LittleEndian, &blockIndex); err != nil {
+			return err
+		}
+		blockIndices = append(blockIndices, blockIndex)
+	}
+	a.BlockIndices = blockIndices
+	return nil
+}
 
-	return &FileAttr{
-		Offset: binary.LittleEndian.Uint64(data[0:8]),
-		Length: binary.LittleEndian.Uint64(data[8:16]),
-		Mode:   binary.LittleEndian.Uint32(data[16:20]),
-		Uid:    binary.LittleEndian.Uint32(data[20:24]),
-		Gid:    binary.LittleEndian.Uint32(data[24:28]),
-		Atime:  int64(binary.LittleEndian.Uint64(data[28:36])),
-		Mtime:  int64(binary.LittleEndian.Uint64(data[36:44])),
-		Ctime:  int64(binary.LittleEndian.Uint64(data[44:52])),
-	}, nil
+func (a *FileAttr) Equal(b *FileAttr) bool {
+	if a.Mode != b.Mode {
+		return false
+	}
+	if a.Uid != b.Uid {
+		return false
+	}
+	if a.Gid != b.Gid {
+		return false
+	}
+	if a.Atime != b.Atime {
+		return false
+	}
+	if a.Mtime != b.Mtime {
+		return false
+	}
+	if a.Ctime != b.Ctime {
+		return false
+	}
+	if a.Length != b.Length {
+		return false
+	}
+	if a.Blocks != b.Blocks {
+		return false
+	}
+	for i := range a.Blocks {
+		if a.BlockIndices[i] != b.BlockIndices[i] {
+			return false
+		}
+	}
+	return true
 }

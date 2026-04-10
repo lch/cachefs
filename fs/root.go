@@ -203,10 +203,6 @@ func (n *RootNode) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errn
 	return 0
 }
 
-func (n *RootNode) prefixExists(name string) (bool, error) {
-	return n.cfs.Store.PrefixExists(name)
-}
-
 func (n *RootNode) newPrefixInode(ctx context.Context, name string) (child *gfs.Inode) {
 	ops := &PrefixDirNode{cfs: n.cfs, prefix: name}
 	return newInodeOrPlaceholder(&n.Inode, ctx, ops, gfs.StableAttr{Mode: fuse.S_IFDIR, Ino: prefixIno(name)})

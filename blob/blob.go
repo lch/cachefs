@@ -1,17 +1,24 @@
 package blob
 
 import (
+	"bytes"
+	"encoding/binary"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/lch/cachefs/internal/meta"
+	"go.etcd.io/bbolt"
 )
+
+const BlobMetadataBucketName = "_blob"
 
 // BlobManager manages per-prefix blob files.
 type BlobManager struct {
 	dir   string
+	db    *bbolt.DB
 	mu    sync.RWMutex
 	files map[string]*BlobFile
 }
@@ -20,13 +27,19 @@ type BlobManager struct {
 type BlobFile struct {
 	mu   sync.Mutex
 	f    *os.File
-	size int64
+	size uint64
+	BlobFileMeta
+}
+
+type BlobFileMeta struct {
+	RecycledBlocks []uint64
 }
 
 // NewBlobManager returns a manager rooted at dir.
-func NewBlobManager(dir string) *BlobManager {
+func NewBlobManager(dir string, db *bbolt.DB) *BlobManager {
 	return &BlobManager{
 		dir:   dir,
+		db:    db,
 		files: make(map[string]*BlobFile),
 	}
 }
@@ -43,8 +56,13 @@ func (m *BlobManager) openOrCreateLocked(prefix string) (*BlobFile, error) {
 		_ = f.Close()
 		return nil, err
 	}
-
-	return &BlobFile{f: f, size: info.Size()}, nil
+	var bfm BlobFileMeta
+	err = bfm.Load(prefix, m.db)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return &BlobFile{f: f, size: uint64(info.Size()), BlobFileMeta: bfm}, nil
 }
 
 func (m *BlobManager) withBlobFile(prefix string, fn func(*BlobFile) error) error {
@@ -70,104 +88,53 @@ func (m *BlobManager) withBlobFile(prefix string, fn func(*BlobFile) error) erro
 	return fn(bf)
 }
 
-// Read returns length bytes from the blob identified by prefix.
-func (m *BlobManager) Read(prefix string, offset, length uint64) ([]byte, error) {
-	if err := m.withBlobFile(prefix, func(bf *BlobFile) error { return nil }); err != nil {
-		return nil, err
-	}
-
-	if length == 0 {
-		return []byte{}, nil
-	}
-	if length > uint64(int(^uint(0)>>1)) {
-		return nil, fmt.Errorf("blob: read length too large: %d", length)
-	}
-	if offset > uint64(int64(^uint64(0)>>1)) {
-		return nil, fmt.Errorf("blob: read offset too large: %d", offset)
-	}
-
-	var data []byte
+// Read returns length bytes from the blob identified by a list of block indices.
+func (m *BlobManager) Read(prefix string, blocks []uint64) ([]byte, error) {
+	data := make([]byte, len(blocks)*meta.DefaultBlockSize)
 	err := m.withBlobFile(prefix, func(bf *BlobFile) error {
-		buf := make([]byte, int(length))
-		n, readErr := bf.f.ReadAt(buf, int64(offset))
-		if readErr != nil {
-			if errors.Is(readErr, io.EOF) && n == len(buf) {
-				readErr = nil
-			} else if errors.Is(readErr, io.EOF) {
-				readErr = io.ErrUnexpectedEOF
+		for i, blockIndex := range blocks {
+			bufStart := i * meta.DefaultBlockSize
+			bufEnd := (i + 1) * meta.DefaultBlockSize
+			buf := data[bufStart:bufEnd]
+			fileOffset := blockIndex * meta.DefaultBlockSize
+			n, readErr := bf.f.ReadAt(buf, int64(fileOffset))
+			if readErr != nil {
+				if errors.Is(readErr, io.EOF) && n == len(buf) {
+					readErr = nil
+				} else if errors.Is(readErr, io.EOF) {
+					readErr = io.ErrUnexpectedEOF
+				}
+				return readErr
 			}
 		}
-		data = buf[:n]
-		return readErr
+		return nil
 	})
 	return data, err
 }
 
-// Write writes data to the given offset in the blob identified by prefix.
-func (m *BlobManager) Write(prefix string, data []byte, offset uint64) error {
-	if len(data) == 0 {
-		return nil
-	}
-	if offset > uint64(int64(^uint64(0)>>1)) {
-		return fmt.Errorf("blob: write offset too large: %d", offset)
-	}
-	if len(data) > int(^uint(0)>>1) {
-		return fmt.Errorf("blob: write length too large: %d", len(data))
-	}
-
-	return m.withBlobFile(prefix, func(bf *BlobFile) error {
+// Write writes data to the given blocks in the blob identified by prefix and block indices.
+func (m *BlobManager) Write(prefix string, blocks []uint64, data []byte) error {
+	err := m.withBlobFile(prefix, func(bf *BlobFile) error {
 		bf.mu.Lock()
 		defer bf.mu.Unlock()
 
-		n, err := bf.f.WriteAt(data, int64(offset))
-		if err != nil {
-			return err
-		}
-		if n != len(data) {
-			return io.ErrShortWrite
-		}
-
-		end := int64(offset) + int64(len(data))
-		if end > bf.size {
-			bf.size = end
+		for i, blockIndex := range blocks {
+			bufStart := i * meta.DefaultBlockSize
+			bufEnd := (i + 1) * meta.DefaultBlockSize
+			fileOffset := blockIndex * meta.DefaultBlockSize
+			n, err := bf.f.WriteAt(data[bufStart:bufEnd], int64(fileOffset))
+			if err != nil {
+				if errors.Is(err, io.EOF) && n == meta.DefaultBlockSize {
+					err = nil
+				} else if errors.Is(err, io.EOF) {
+					err = io.ErrUnexpectedEOF
+				}
+				return err
+			}
 		}
 		return nil
 	})
-}
-
-// Append writes data at the end of the blob and returns the offset used.
-func (m *BlobManager) Append(prefix string, data []byte) (offset uint64, err error) {
-	if len(data) == 0 {
-		var bf *BlobFile
-		err = m.withBlobFile(prefix, func(file *BlobFile) error {
-			bf = file
-			return nil
-		})
-		if err != nil {
-			return 0, err
-		}
-		return uint64(bf.size), nil
-	}
-	if len(data) > int(^uint(0)>>1) {
-		return 0, fmt.Errorf("blob: append length too large: %d", len(data))
-	}
-
-	err = m.withBlobFile(prefix, func(bf *BlobFile) error {
-		bf.mu.Lock()
-		defer bf.mu.Unlock()
-
-		offset = uint64(bf.size)
-		n, writeErr := bf.f.WriteAt(data, bf.size)
-		if writeErr != nil {
-			return writeErr
-		}
-		if n != len(data) {
-			return io.ErrShortWrite
-		}
-		bf.size += int64(len(data))
-		return nil
-	})
-	return offset, err
+	return err
 }
 
 // RemoveBlob closes and deletes the blob file for prefix.
@@ -196,14 +163,78 @@ func (m *BlobManager) Close() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var firstErr error
+	var errs []error
 	for prefix, bf := range m.files {
 		if bf != nil && bf.f != nil {
-			if err := bf.f.Close(); err != nil && firstErr == nil {
-				firstErr = err
+			err := bf.Save(prefix, m.db)
+			if err != nil {
+				errs = append(errs, err)
+			}
+			if err := bf.f.Close(); err != nil {
+				errs = append(errs, err)
 			}
 		}
 		delete(m.files, prefix)
 	}
-	return firstErr
+	return errors.Join(errs...)
+}
+
+func (m *BlobFileMeta) Load(prefix string, db *bbolt.DB) (err error) {
+	err = db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(BlobMetadataBucketName))
+		if b == nil {
+			return errors.New("BlobFileMeta: no metadata bucket found")
+		}
+		data := b.Get([]byte(prefix))
+		if data != nil {
+			err = m.UnmarshalBinary(data)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return
+}
+
+func (m *BlobFileMeta) Save(prefix string, db *bbolt.DB) (err error) {
+	err = db.Update(func(tx *bbolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists([]byte(BlobMetadataBucketName))
+		if err != nil {
+			return err
+		}
+		data, err := m.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		b.Put([]byte(prefix), data)
+		return nil
+	})
+	return
+}
+
+func (m *BlobFileMeta) MarshalBinary() (data []byte, err error) {
+	data = binary.LittleEndian.AppendUint64(data, uint64(len(m.RecycledBlocks)))
+	for _, blockInd := range m.RecycledBlocks {
+		data = binary.LittleEndian.AppendUint64(data, blockInd)
+	}
+	return
+}
+
+func (m *BlobFileMeta) UnmarshalBinary(data []byte) (err error) {
+	var length uint64
+	buf := bytes.NewReader(data)
+	err = binary.Read(buf, binary.LittleEndian, &length)
+	if err != nil {
+		return err
+	}
+	for i := 0; i < int(length); i++ {
+		var blockInd uint64
+		err = binary.Read(buf, binary.LittleEndian, &blockInd)
+		if err != nil {
+			return err
+		}
+		m.RecycledBlocks = append(m.RecycledBlocks, blockInd)
+	}
+	return
 }
