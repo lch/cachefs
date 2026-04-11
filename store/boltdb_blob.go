@@ -15,7 +15,6 @@ import (
 	"go.etcd.io/bbolt"
 )
 
-
 const (
 	defaultMetadataDB = "metadata.db"
 )
@@ -49,8 +48,8 @@ func NewStore(dir string) (Store, error) {
 	return s, nil
 }
 
-func (s *boltDBBlobStore) Read(path string) (data []byte, attr *meta.FileAttr, err error) {
-	attr, err = s.GetMeta(path)
+func (s *boltDBBlobStore) Read(p meta.Path) (data []byte, attr *meta.FileAttr, err error) {
+	attr, err = s.GetMeta(p)
 	if err != nil {
 		return
 	}
@@ -58,7 +57,6 @@ func (s *boltDBBlobStore) Read(path string) (data []byte, attr *meta.FileAttr, e
 		return nil, attr, nil
 	}
 
-	p, _ := meta.NewPathFromString(path)
 	data, err = s.blobs.Read(p.Prefix, attr.BlockIndices)
 	if err != nil {
 		return
@@ -69,16 +67,12 @@ func (s *boltDBBlobStore) Read(path string) (data []byte, attr *meta.FileAttr, e
 	return
 }
 
-func (s *boltDBBlobStore) Write(path string, data []byte, mode uint32) error {
-	p, err := meta.NewPathFromString(path)
-	if err != nil {
-		return err
-	}
+func (s *boltDBBlobStore) Write(p meta.Path, data []byte, mode uint32) error {
 	if p.Kind == meta.PathIsRootFolder || p.Kind == meta.PathIsPrefixFolder {
 		return errors.New("store: cannot write to folder")
 	}
 
-	attr, err := s.GetMeta(path)
+	attr, err := s.GetMeta(p)
 	if err != nil && !errors.Is(err, os.ErrNotExist) && !strings.Contains(err.Error(), "not found") {
 		return err
 	}
@@ -124,73 +118,132 @@ func (s *boltDBBlobStore) Write(path string, data []byte, mode uint32) error {
 	attr.Length = uint64(len(data))
 	attr.Blocks = uint64(len(blocks))
 	attr.BlockIndices = blocks
-	return s.UpdateMeta(path, attr)
+	return s.UpdateMeta(p, attr)
 }
 
-func (s *boltDBBlobStore) Delete(path string) error {
-	attr, err := s.GetMeta(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "not found") {
+func (s *boltDBBlobStore) Delete(p meta.Path) error {
+	switch p.Kind {
+	case meta.PathIsRootFolder:
+
+	case meta.PathIsPrefixFolder:
+		err := s.db.View(func(tx *bbolt.Tx) error {
+			b := tx.Bucket([]byte(p.Prefix))
+			if b == nil {
+				return nil
+			}
+			bs := b.Inspect()
+			if bs.KeyN != 0 {
+				return ErrFolderNotEmpty
+			}
 			return nil
+		})
+		if err != nil {
+			return errors.Join(ErrStoreCorrupt, err)
 		}
+		err = s.db.Update(func(tx *bbolt.Tx) error {
+			_ = tx.DeleteBucket([]byte(p.Prefix))
+			b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
+			if b != nil {
+				_ = b.Delete([]byte(p.Prefix))
+			}
+			return s.blobs.RemoveBlob(p.Prefix)
+		})
 		return err
-	}
-	if attr.IsDir() {
-		return s.Remove(path)
-	}
-
-	p, _ := meta.NewPathFromString(path)
-	if err := s.releaseBlocks(p.Prefix, attr.BlockIndices); err != nil {
-		return err
-	}
-
-	return s.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(p.Prefix))
-		if b != nil {
-			return b.Delete([]byte(p.Key))
+	case meta.PathIsSubFolder:
+		fileCount := 0
+		err := s.db.View(func(tx *bbolt.Tx) error {
+			b := tx.Bucket([]byte(p.Prefix))
+			if b == nil {
+				return nil
+			}
+			b.ForEach(func(k, v []byte) error {
+				if strings.HasPrefix(string(k), p.Key) {
+					fileCount++
+				}
+				return nil
+			})
+			return nil
+		})
+		if err != nil {
+			return err
 		}
-		return nil
-	})
+		if fileCount > 1 {
+			return ErrFolderNotEmpty
+		}
+		err = s.db.Update(func(tx *bbolt.Tx) error {
+			b := tx.Bucket([]byte(p.Prefix))
+			if b != nil {
+				return b.Delete([]byte(p.Key))
+			}
+			return nil
+		})
+		return err
+	case meta.PathIsFile:
+		attr, err := s.GetMeta(p)
+		if err != nil {
+			return err
+		}
+		if err := s.releaseBlocks(p.Prefix, attr.BlockIndices); err != nil {
+			return err
+		}
+		return s.db.Update(func(tx *bbolt.Tx) error {
+			b := tx.Bucket([]byte(p.Prefix))
+			if b != nil {
+				return b.Delete([]byte(p.Key))
+			}
+			return nil
+		})
+	}
+	return nil
 }
 
-func (s *boltDBBlobStore) GetMeta(path string) (*meta.FileAttr, error) {
-	p, err := meta.NewPathFromString(path)
-	if err != nil {
-		return nil, err
-	}
-
+func (s *boltDBBlobStore) GetMeta(p meta.Path) (attr *meta.FileAttr, err error) {
 	if p.Kind == meta.PathIsRootFolder {
 		return &meta.FileAttr{
 			Mode: uint32(syscall.S_IFDIR) | 0o755,
 		}, nil
 	}
 
-	var attr *meta.FileAttr
 	err = s.db.View(func(tx *bbolt.Tx) error {
-		if p.Kind == meta.PathIsPrefixFolder {
+		switch p.Kind {
+		case meta.PathIsPrefixFolder:
 			b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
 			if b == nil {
-				return notFound("blob metadata bucket", path)
+				return notFound("blob metadata bucket", p.String())
 			}
 			if b.Get([]byte(p.Prefix)) == nil {
-				return notFound("prefix", path)
+				return notFound("prefix", p.String())
 			}
 			attr = &meta.FileAttr{
 				Mode: uint32(syscall.S_IFDIR) | 0o755,
 			}
 			return nil
+		case meta.PathIsSubFolder:
+			b := tx.Bucket([]byte(p.Prefix))
+			if b == nil {
+				return notFound("prefix bucket", p.String())
+			}
+			data := b.Get([]byte(p.Key))
+			if data == nil {
+				return notFound("key", p.String())
+			}
+			attr = &meta.FileAttr{
+				Mode: uint32(syscall.S_IFDIR) | 0o755,
+			}
+			return attr.UnmarshalBinary(data)
+		case meta.PathIsFile:
+			b := tx.Bucket([]byte(p.Prefix))
+			if b == nil {
+				return notFound("prefix bucket", p.String())
+			}
+			data := b.Get([]byte(p.Key))
+			if data == nil {
+				return notFound("key", p.String())
+			}
+			attr = &meta.FileAttr{}
+			return attr.UnmarshalBinary(data)
 		}
-
-		b := tx.Bucket([]byte(p.Prefix))
-		if b == nil {
-			return notFound("prefix bucket", path)
-		}
-		data := b.Get([]byte(p.Key))
-		if data == nil {
-			return notFound("key", path)
-		}
-		attr = new(meta.FileAttr)
-		return attr.UnmarshalBinary(data)
+		return nil
 	})
 	if err != nil {
 		return nil, err
@@ -198,11 +251,7 @@ func (s *boltDBBlobStore) GetMeta(path string) (*meta.FileAttr, error) {
 	return attr, nil
 }
 
-func (s *boltDBBlobStore) UpdateMeta(path string, attr *meta.FileAttr) error {
-	p, err := meta.NewPathFromString(path)
-	if err != nil {
-		return err
-	}
+func (s *boltDBBlobStore) UpdateMeta(p meta.Path, attr *meta.FileAttr) error {
 	if p.Kind == meta.PathIsRootFolder || p.Kind == meta.PathIsPrefixFolder {
 		return nil
 	}
@@ -233,8 +282,8 @@ func (s *boltDBBlobStore) UpdateMeta(path string, attr *meta.FileAttr) error {
 	})
 }
 
-func (s *boltDBBlobStore) Truncate(path string, newSize uint64) error {
-	attr, err := s.GetMeta(path)
+func (s *boltDBBlobStore) Truncate(p meta.Path, newSize uint64) error {
+	attr, err := s.GetMeta(p)
 	if err != nil {
 		return err
 	}
@@ -245,7 +294,6 @@ func (s *boltDBBlobStore) Truncate(path string, newSize uint64) error {
 		return nil
 	}
 
-	p, _ := meta.NewPathFromString(path)
 	neededBlocks := (newSize + meta.DefaultBlockSize - 1) / meta.DefaultBlockSize
 
 	if uint64(len(attr.BlockIndices)) < neededBlocks {
@@ -264,21 +312,17 @@ func (s *boltDBBlobStore) Truncate(path string, newSize uint64) error {
 
 	attr.Length = newSize
 	attr.Blocks = uint64(len(attr.BlockIndices))
-	return s.UpdateMeta(path, attr)
+	return s.UpdateMeta(p, attr)
 }
 
-func (s *boltDBBlobStore) List(path string) ([]string, error) {
+func (s *boltDBBlobStore) List(p meta.Path) ([]string, error) {
 	list := make([]string, 0)
-	p, err := meta.NewPathFromString(path)
-	if err != nil {
-		return []string{}, err
-	}
 	switch p.Kind {
 	case meta.PathIsRootFolder:
 		s.db.View(func(tx *bbolt.Tx) error {
 			b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
 			if b == nil {
-				return notFound("blob metadata bucket", path)
+				return notFound("blob metadata bucket", p.String())
 			}
 			err := b.ForEach(func(k, v []byte) error {
 				list = append(list, string(k))
@@ -293,7 +337,7 @@ func (s *boltDBBlobStore) List(path string) ([]string, error) {
 		s.db.View(func(tx *bbolt.Tx) error {
 			b := tx.Bucket([]byte(p.Prefix))
 			if b == nil {
-				return notFound(p.Prefix, path)
+				return notFound("prefix", p.String())
 			}
 			err := b.ForEach(func(k, v []byte) error {
 				keyStr := string(k)
@@ -318,11 +362,7 @@ func (s *boltDBBlobStore) List(path string) ([]string, error) {
 	return list, nil
 }
 
-func (s *boltDBBlobStore) Create(path string) error {
-	p, err := meta.NewPathFromString(path)
-	if err != nil {
-		return err
-	}
+func (s *boltDBBlobStore) Create(p meta.Path) error {
 	if p.Kind == meta.PathIsPrefixFolder {
 		return s.db.Update(func(tx *bbolt.Tx) error {
 			_, err := tx.CreateBucketIfNotExists([]byte(p.Prefix))
@@ -342,7 +382,7 @@ func (s *boltDBBlobStore) Create(path string) error {
 		})
 	}
 
-	exists, err := s.Exists(path)
+	exists, err := s.Exists(p)
 	if err != nil {
 		return err
 	}
@@ -356,52 +396,11 @@ func (s *boltDBBlobStore) Create(path string) error {
 	if p.Kind == meta.PathIsSubFolder {
 		attr.Mode = uint32(syscall.S_IFDIR) | meta.DefaultDirMode
 	}
-	return s.UpdateMeta(path, attr)
+	return s.UpdateMeta(p, attr)
 }
 
-func (s *boltDBBlobStore) Remove(path string) error {
-	attr, err := s.GetMeta(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "not found") {
-			return nil
-		}
-		return err
-	}
-	if !attr.IsDir() {
-		return errors.New("store: use Delete for files")
-	}
-
-	list, err := s.List(path)
-	if err != nil {
-		return err
-	}
-	if len(list) > 0 {
-		return ErrPrefixNotEmpty
-	}
-
-	p, _ := meta.NewPathFromString(path)
-	if p.Kind == meta.PathIsPrefixFolder {
-		return s.db.Update(func(tx *bbolt.Tx) error {
-			_ = tx.DeleteBucket([]byte(p.Prefix))
-			b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
-			if b != nil {
-				_ = b.Delete([]byte(p.Prefix))
-			}
-			return s.blobs.RemoveBlob(p.Prefix)
-		})
-	}
-
-	return s.db.Update(func(tx *bbolt.Tx) error {
-		b := tx.Bucket([]byte(p.Prefix))
-		if b != nil {
-			return b.Delete([]byte(p.Key))
-		}
-		return nil
-	})
-}
-
-func (s *boltDBBlobStore) Exists(path string) (bool, error) {
-	attr, err := s.GetMeta(path)
+func (s *boltDBBlobStore) Exists(p meta.Path) (bool, error) {
+	attr, err := s.GetMeta(p)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "not found") {
 			return false, nil
@@ -411,26 +410,17 @@ func (s *boltDBBlobStore) Exists(path string) (bool, error) {
 	return attr != nil, nil
 }
 
-func (s *boltDBBlobStore) Rename(oldPath, newPath string) error {
-	oldP, err := meta.NewPathFromString(oldPath)
-	if err != nil {
-		return err
-	}
-	newP, err := meta.NewPathFromString(newPath)
-	if err != nil {
-		return err
-	}
-
+func (s *boltDBBlobStore) Rename(oldPath, newPath meta.Path) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
-		oldB := tx.Bucket([]byte(oldP.Prefix))
+		oldB := tx.Bucket([]byte(oldPath.Prefix))
 		if oldB == nil {
-			return notFound("prefix bucket", oldPath)
+			return notFound("prefix bucket", oldPath.String())
 		}
 
 		// Check if it's a directory (trailing slash in key or isDir attr)
-		isDir := strings.HasSuffix(oldP.Key, "/")
+		isDir := strings.HasSuffix(oldPath.Key, "/")
 		if !isDir {
-			data := oldB.Get([]byte(oldP.Key))
+			data := oldB.Get([]byte(oldPath.Key))
 			if data != nil {
 				attr := new(meta.FileAttr)
 				if err := attr.UnmarshalBinary(data); err == nil && attr.IsDir() {
@@ -439,27 +429,27 @@ func (s *boltDBBlobStore) Rename(oldPath, newPath string) error {
 			}
 		}
 
-		newB, err := tx.CreateBucketIfNotExists([]byte(newP.Prefix))
+		newB, err := tx.CreateBucketIfNotExists([]byte(newPath.Prefix))
 		if err != nil {
 			return err
 		}
 
 		if !isDir {
-			data := oldB.Get([]byte(oldP.Key))
+			data := oldB.Get([]byte(oldPath.Key))
 			if data == nil {
-				return notFound("key", oldPath)
+				return notFound("key", oldPath.String())
 			}
-			if err := newB.Put([]byte(newP.Key), data); err != nil {
+			if err := newB.Put([]byte(newPath.Key), data); err != nil {
 				return err
 			}
-			return oldB.Delete([]byte(oldP.Key))
+			return oldB.Delete([]byte(oldPath.Key))
 		}
 
-		// Handle directory rename: move all keys starting with oldP.Key
+		// Handle directory rename: move all keys starting with oldPath.Key
 		cursor := oldB.Cursor()
-		prefix := []byte(oldP.Key)
+		prefix := []byte(oldPath.Key)
 		for k, v := cursor.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = cursor.Next() {
-			newKey := append([]byte(newP.Key), k[len(prefix):]...)
+			newKey := append([]byte(newPath.Key), k[len(prefix):]...)
 			if err := newB.Put(newKey, v); err != nil {
 				return err
 			}

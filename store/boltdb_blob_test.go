@@ -3,7 +3,10 @@ package store
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"testing"
+
+	"github.com/lch/cachefs/internal/meta"
 )
 
 func newStoreForTest(t *testing.T) (Store, string) {
@@ -23,9 +26,9 @@ func newStoreForTest(t *testing.T) (Store, string) {
 
 func TestWriteFileReadFileRoundTrip(t *testing.T) {
 	s, _ := newStoreForTest(t)
-	path := "aa/testfile"
+	path, _ := meta.NewPathFromString("aa/testfile")
 	data := []byte("hello world")
-	mode := uint32(0644)
+	mode := uint32(0o644)
 
 	err := s.Write(path, data, mode)
 	if err != nil {
@@ -53,10 +56,10 @@ func TestWriteFileReadFileRoundTrip(t *testing.T) {
 
 func TestDeleteFile(t *testing.T) {
 	s, _ := newStoreForTest(t)
-	path := "aa/testfile"
+	path, _ := meta.NewPathFromString("aa/testfile")
 	data := []byte("hello world")
 
-	_ = s.Write(path, data, 0644)
+	_ = s.Write(path, data, 0o644)
 	err := s.Delete(path)
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
@@ -70,10 +73,10 @@ func TestDeleteFile(t *testing.T) {
 
 func TestTruncate(t *testing.T) {
 	s, _ := newStoreForTest(t)
-	path := "aa/testfile"
+	path, _ := meta.NewPathFromString("aa/testfile")
 	data := []byte("hello world") // 11 bytes
 
-	_ = s.Write(path, data, 0644)
+	_ = s.Write(path, data, 0o644)
 
 	// Shrink
 	err := s.Truncate(path, 5)
@@ -101,12 +104,19 @@ func TestTruncate(t *testing.T) {
 
 func TestList(t *testing.T) {
 	s, _ := newStoreForTest(t)
-	_ = s.Write("aa/f1", []byte("1"), 0644)
-	_ = s.Write("aa/f2", []byte("2"), 0644)
-	_ = s.Write("bb/f1", []byte("3"), 0644)
+
+	files := []meta.Path{
+		{Prefix: "aa", Key: "f1", Kind: meta.PathIsFile},
+		{Prefix: "aa", Key: "f2", Kind: meta.PathIsFile},
+		{Prefix: "bb", Key: "f1", Kind: meta.PathIsFile},
+	}
+
+	for k, file := range files {
+		_ = s.Write(file, []byte{byte(k)}, 0o644)
+	}
 
 	// List root
-	prefixes, err := s.List("")
+	prefixes, err := s.List(meta.Path{Kind: meta.PathIsRootFolder})
 	if err != nil {
 		t.Fatalf("List root failed: %v", err)
 	}
@@ -130,7 +140,8 @@ func TestList(t *testing.T) {
 	}
 
 	// List prefix
-	keys, err := s.List("aa/")
+	prefix := meta.Path{Prefix: "aa", Key: "", Kind: meta.PathIsPrefixFolder}
+	keys, err := s.List(prefix)
 	if err != nil {
 		t.Fatalf("List aa/ failed: %v", err)
 	}
@@ -141,8 +152,8 @@ func TestList(t *testing.T) {
 
 func TestMetadata(t *testing.T) {
 	s, _ := newStoreForTest(t)
-	path := "aa/f1"
-	_ = s.Write(path, []byte("data"), 0644)
+	path, _ := meta.NewPathFromString("aa/f1")
+	_ = s.Write(path, []byte("data"), 0o644)
 
 	attr, _ := s.GetMeta(path)
 	attr.Uid = 1000
@@ -163,52 +174,59 @@ func TestDirectoryOperations(t *testing.T) {
 	s, _ := newStoreForTest(t)
 
 	// Create prefix
-	err := s.Create("cc/")
+	prefix := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: "cc", Key: ""}
+	err := s.Create(prefix)
 	if err != nil {
 		t.Fatalf("Create prefix failed: %v", err)
 	}
-	exists, _ := s.Exists("cc/")
+	exists, _ := s.Exists(prefix)
 	if !exists {
 		t.Error("Prefix does not exist after Create")
 	}
 
+	sub := prefix
+	sub.Kind = meta.PathIsSubFolder
+	sub.Key = "sub/"
 	// Create subfolder
-	err = s.Create("cc/sub/")
+	err = s.Create(sub)
 	if err != nil {
 		t.Fatalf("Create subfolder failed: %v", err)
 	}
-	exists, _ = s.Exists("cc/sub/")
+	exists, _ = s.Exists(sub)
 	if !exists {
 		t.Error("Subfolder does not exist after Create")
 	}
 
 	// Remove empty subfolder
-	err = s.Remove("cc/sub/")
+	err = s.Delete(sub)
 	if err != nil {
 		t.Fatalf("Remove subfolder failed: %v", err)
 	}
-	exists, _ = s.Exists("cc/sub/")
+	exists, _ = s.Exists(sub)
 	if exists {
 		t.Error("Subfolder still exists after Remove")
 	}
 
 	// Remove prefix
-	err = s.Remove("cc/")
+	err = s.Delete(prefix)
 	if err != nil {
 		t.Fatalf("Remove prefix failed: %v", err)
 	}
-	exists, _ = s.Exists("cc/")
+	exists, _ = s.Exists(prefix)
 	if exists {
 		t.Error("Prefix still exists after Remove")
 	}
 }
 
-func TestErrPrefixNotEmpty(t *testing.T) {
+func TestErrFolderNotEmpty(t *testing.T) {
 	s, _ := newStoreForTest(t)
-	_ = s.Write("aa/f1", []byte("data"), 0644)
+	prefix := "aa"
+	prefixPath := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: prefix}
+	filePath := meta.Path{Kind: meta.PathIsFile, Prefix: prefix, Key: "f1"}
+	_ = s.Write(filePath, []byte("data"), 0o644)
 
-	err := s.Remove("aa/")
-	if !errors.Is(err, ErrPrefixNotEmpty) {
+	err := s.Delete(prefixPath)
+	if !errors.Is(err, ErrFolderNotEmpty) {
 		t.Errorf("Expected ErrPrefixNotEmpty, got %v", err)
 	}
 }
@@ -217,27 +235,26 @@ func TestBlockRecycling(t *testing.T) {
 	s, _ := newStoreForTest(t)
 	// Write enough data to use a few blocks (BlockSize is 4096)
 	data := make([]byte, 10000) // ~2.5 blocks
-	_ = s.Write("aa/f1", data, 0644)
+	path := meta.Path{Kind: meta.PathIsFile, Prefix: "aa", Key: "f1"}
+	_ = s.Write(path, data, 0o644)
 
-	attr1, _ := s.GetMeta("aa/f1")
+	attr1, _ := s.GetMeta(path)
 	blocks1 := make([]uint64, len(attr1.BlockIndices))
 	copy(blocks1, attr1.BlockIndices)
 
-	_ = s.Delete("aa/f1")
+	_ = s.Delete(path)
 
 	// Write again, should reuse some blocks
-	_ = s.Write("aa/f2", data, 0644)
-	attr2, _ := s.GetMeta("aa/f2")
+	newPath := meta.Path{Kind: meta.PathIsFile, Prefix: "aa", Key: "f2"}
+	_ = s.Write(newPath, data, 0o644)
+	attr2, _ := s.GetMeta(newPath)
 	blocks2 := attr2.BlockIndices
 
 	// Check if any block is reused
 	found := false
 	for _, b1 := range blocks1 {
-		for _, b2 := range blocks2 {
-			if b1 == b2 {
-				found = true
-				break
-			}
+		if slices.Contains(blocks2, b1) {
+			found = true
 		}
 	}
 	if !found {

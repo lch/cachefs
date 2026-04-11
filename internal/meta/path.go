@@ -22,9 +22,9 @@ type Path struct {
 	Kind   int
 }
 
-func NewPathFromString(path string) (*Path, error) {
+func NewPathFromString(path string) (Path, error) {
 	if path == "" {
-		return &Path{Kind: PathIsRootFolder}, nil
+		return Path{Kind: PathIsRootFolder}, nil
 	} else {
 		prefix, key, _ := strings.Cut(path, "/")
 		if prefix != "" && IsHexPrefix(prefix) {
@@ -36,10 +36,10 @@ func NewPathFromString(path string) (*Path, error) {
 					kind = PathIsFile
 				}
 			}
-			return &Path{Prefix: prefix, Key: key, Kind: kind}, nil
+			return Path{Prefix: prefix, Key: key, Kind: kind}, nil
 		}
 	}
-	return &Path{Kind: PathInvalid}, ErrInvalidPath
+	return Path{Kind: PathInvalid}, ErrInvalidPath
 }
 
 func (p Path) String() string {
