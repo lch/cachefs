@@ -3,11 +3,22 @@ package fs
 import (
 	"context"
 	"hash/fnv"
+	"math"
+	"strconv"
 	"time"
 
 	gfs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/lch/cachefs/internal/meta"
+)
+
+const (
+	InodeRoot        = 0
+	INodeCurrent     = 1
+	InodeParent      = 2
+	InodeShift       = 3
+	InodeFallback    = 0x100
+	InodeReservedBit = 10
 )
 
 func newInodeOrPlaceholder(parent *gfs.Inode, ctx context.Context, ops gfs.InodeEmbedder, stable gfs.StableAttr) (inode *gfs.Inode) {
@@ -19,31 +30,28 @@ func newInodeOrPlaceholder(parent *gfs.Inode, ctx context.Context, ops gfs.Inode
 	return parent.NewInode(ctx, ops, stable)
 }
 
-func fileIno(prefix, name string) uint64 {
+func pathIno(path meta.Path) uint64 {
 	h := fnv.New64a()
-	_, _ = h.Write([]byte(prefix))
-	_, _ = h.Write([]byte{'/'})
-	_, _ = h.Write([]byte(name))
-	return h.Sum64() | (1 << 63)
-}
-
-func subdirFileIno(prefix, dirname, name string) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte(prefix))
-	_, _ = h.Write([]byte{'/'})
-	_, _ = h.Write([]byte(dirname))
-	_, _ = h.Write([]byte{'/'})
-	_, _ = h.Write([]byte(name))
-	return h.Sum64() | (1 << 63)
-}
-
-func subdirIno(prefix, dirname string) uint64 {
-	h := fnv.New64a()
-	_, _ = h.Write([]byte("dir:"))
-	_, _ = h.Write([]byte(prefix))
-	_, _ = h.Write([]byte{'/'})
-	_, _ = h.Write([]byte(dirname))
-	return h.Sum64() | (1 << 62)
+	switch path.Kind {
+	case meta.PathIsRootFolder:
+		return InodeRoot
+	case meta.PathIsPrefixFolder:
+		var ino uint64
+		ino, err := strconv.ParseUint(path.Prefix, 16, 64)
+		if err != nil {
+			ino = InodeFallback
+		}
+		return ino + InodeShift
+	case meta.PathIsSubFolder:
+		_, _ = h.Write([]byte("dir:"))
+		_, _ = h.Write([]byte(path.String()))
+	case meta.PathIsFile:
+		_, _ = h.Write([]byte("file:"))
+		_, _ = h.Write([]byte(path.String()))
+	default:
+		return math.MaxUint64
+	}
+	return h.Sum64() | (1 << InodeReservedBit)
 }
 
 func fillFileEntryOut(out *fuse.EntryOut, cfs *CacheFS, attr *meta.FileAttr, ino uint64) {

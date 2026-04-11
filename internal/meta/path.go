@@ -2,6 +2,7 @@ package meta
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -39,6 +40,10 @@ func NewPathFromString(path string) (*Path, error) {
 		}
 	}
 	return &Path{Kind: PathInvalid}, ErrInvalidPath
+}
+
+func (p Path) String() string {
+	return fmt.Sprintf("%v/%v", p.Prefix, p.Key)
 }
 
 func isHexPrefix(prefix string) bool {
