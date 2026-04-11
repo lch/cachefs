@@ -331,13 +331,21 @@ func (s *boltDBBlobStore) Create(path string) error {
 			if err != nil {
 				return err
 			}
-			if b.Get([]byte(p.Prefix)) == nil {
-				bm := blob.BlobFileMeta{}
-				data, _ := bm.MarshalBinary()
-				return b.Put([]byte(p.Prefix), data)
+			if b.Get([]byte(p.Prefix)) != nil {
+				return os.ErrExist
 			}
-			return nil
+			bm := blob.BlobFileMeta{}
+			data, _ := bm.MarshalBinary()
+			return b.Put([]byte(p.Prefix), data)
 		})
+	}
+
+	exists, err := s.Exists(path)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return os.ErrExist
 	}
 
 	attr := &meta.FileAttr{

@@ -2,11 +2,13 @@ package fs
 
 import (
 	"context"
+	"syscall"
 	"testing"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/lch/cachefs/store"
 )
+
 
 func TestRootNode_Lookup(t *testing.T) {
 	root, st := newTestRoot(t)
@@ -60,6 +62,12 @@ func TestRootNode_Mkdir(t *testing.T) {
 	exists, _ := st.Exists("aa")
 	if !exists {
 		t.Errorf("prefix not created in store")
+	}
+
+	// Test Mkdir existing
+	_, errno = root.Mkdir(ctx, "aa", 0755, &out)
+	if errno != syscall.EEXIST {
+		t.Errorf("expected EEXIST, got %v", errno)
 	}
 }
 
@@ -121,10 +129,13 @@ func TestRootNode_Getattr(t *testing.T) {
 	if out.Ino != InodeRoot {
 		t.Errorf("expected Ino %d, got %d", InodeRoot, out.Ino)
 	}
+	if out.Atime == 0 || out.Mtime == 0 || out.Ctime == 0 {
+		t.Errorf("times not set")
+	}
 }
 
 func TestRootNode_Statfs(t *testing.T) {
-	root, _ := newTestRoot(t)
+	root, st := newTestRoot(t)
 	ctx := context.Background()
 
 	var out fuse.StatfsOut
@@ -135,6 +146,40 @@ func TestRootNode_Statfs(t *testing.T) {
 
 	if out.Bsize != 4096 {
 		t.Errorf("expected Bsize 4096, got %d", out.Bsize)
+	}
+	if out.Files != 0 {
+		t.Errorf("expected 0 files, got %d", out.Files)
+	}
+
+	// Add files and check count
+	_ = st.Create("01")
+	err := st.Write("01/f1", []byte("hello"), 0644)
+	if err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	_ = st.Write("01/f2", []byte("world"), 0644)
+
+	_ = root.Statfs(ctx, &out)
+	if out.Files != 2 {
+		t.Errorf("expected 2 files, got %d", out.Files)
+	}
+}
+
+func TestRootNode_NilSafety(t *testing.T) {
+	root := &RootNode{}
+	ctx := context.Background()
+
+	if errno := root.Getattr(ctx, nil, &fuse.AttrOut{}); errno != syscall.EIO {
+		t.Errorf("Getattr: expected EIO, got %v", errno)
+	}
+	if _, errno := root.Lookup(ctx, "01", &fuse.EntryOut{}); errno != syscall.EIO {
+		t.Errorf("Lookup: expected EIO, got %v", errno)
+	}
+	if _, errno := root.Mkdir(ctx, "01", 0755, &fuse.EntryOut{}); errno != syscall.EIO {
+		t.Errorf("Mkdir: expected EIO, got %v", errno)
+	}
+	if errno := root.Rmdir(ctx, "01"); errno != syscall.EIO {
+		t.Errorf("Rmdir: expected EIO, got %v", errno)
 	}
 }
 
