@@ -36,12 +36,8 @@ func pathIno(path meta.Path) uint64 {
 	case meta.PathIsRootFolder:
 		return InodeRoot
 	case meta.PathIsPrefixFolder:
-		var ino uint64
-		ino, err := strconv.ParseUint(path.Prefix, 16, 64)
-		if err != nil {
-			ino = InodeFallback
-		}
-		return ino + InodeShift
+		ino := prefixDirIno(path.Prefix)
+		return ino
 	case meta.PathIsSubFolder:
 		_, _ = h.Write([]byte("dir:"))
 		_, _ = h.Write([]byte(path.String()))
@@ -52,6 +48,14 @@ func pathIno(path meta.Path) uint64 {
 		return math.MaxUint64
 	}
 	return h.Sum64() | (1 << InodeReservedBit)
+}
+
+func prefixDirIno(prefix string) (ino uint64) {
+	ino, err := strconv.ParseUint(prefix, 16, 64)
+	if err != nil {
+		ino = InodeFallback
+	}
+	return ino + InodeShift
 }
 
 func fillFileEntryOut(out *fuse.EntryOut, cfs *CacheFS, attr *meta.FileAttr, ino uint64) {
@@ -111,4 +115,21 @@ func fillFileAttrOut(out *fuse.AttrOut, cfs *CacheFS, attr *meta.FileAttr, ino u
 	out.Gid = attr.Gid
 	out.Ino = ino
 	out.SetTimes(&atime, &mtime, &ctime)
+}
+
+func fillDirEntryOut(out *fuse.EntryOut, cfs *CacheFS, mode uint32, ino uint64) {
+	if out == nil || cfs == nil {
+		return
+	}
+
+	now := time.Now()
+	out.Mode = mode
+	out.Nlink = 2
+	out.Size = 0
+	out.Blocks = 0
+	out.Blksize = meta.DefaultBlockSize
+	out.Uid = cfs.Uid
+	out.Gid = cfs.Gid
+	out.Ino = ino
+	out.SetTimes(&now, &now, &now)
 }

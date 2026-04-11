@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"syscall"
+	"time"
 
 	gfs "github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -13,7 +14,7 @@ import (
 // CacheFileHandle is the per-open handle state for a cached file.
 type CacheFileHandle struct {
 	cfs  *CacheFS
-	path meta.Path
+	path string
 	attr *meta.FileAttr
 	mode uint32
 
@@ -22,19 +23,22 @@ type CacheFileHandle struct {
 	dirty bool
 }
 
-func (h *CacheFileHandle) stableIno() uint64 {
-	return 0
-}
-
-func (h *CacheFileHandle) getMeta() (attr *meta.FileAttr, err error) {
-	return
-}
-
-func (h *CacheFileHandle) updateMeta(attr *meta.FileAttr) (err error) {
-	return
-}
-
-func (h *CacheFileHandle) writeBuf(buf []byte, mode uint32) error {
+func (h *CacheFileHandle) touchAtime() error {
+	if h == nil || h.cfs == nil || h.cfs.Store == nil {
+		return nil
+	}
+	attr, err := h.cfs.Store.GetMeta(h.path)
+	if err != nil {
+		return err
+	}
+	attr.Atime = time.Now().Unix()
+	if err := h.cfs.Store.UpdateMeta(h.path, attr); err != nil {
+		return err
+	}
+	h.mu.Lock()
+	attrCopy := *attr
+	h.attr = &attrCopy
+	h.mu.Unlock()
 	return nil
 }
 
@@ -64,8 +68,4 @@ func (h *CacheFileHandle) Flush(ctx context.Context) syscall.Errno {
 
 func (h *CacheFileHandle) Release(ctx context.Context) syscall.Errno {
 	return h.Flush(ctx)
-}
-
-func (h *CacheFileHandle) touchAtime() error {
-	return nil
 }
