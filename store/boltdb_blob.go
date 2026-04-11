@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/lch/cachefs/internal/meta"
 	"go.etcd.io/bbolt"
 )
+
 
 const (
 	defaultMetadataDB = "metadata.db"
@@ -407,6 +409,67 @@ func (s *boltDBBlobStore) Exists(path string) (bool, error) {
 		return false, err
 	}
 	return attr != nil, nil
+}
+
+func (s *boltDBBlobStore) Rename(oldPath, newPath string) error {
+	oldP, err := meta.NewPathFromString(oldPath)
+	if err != nil {
+		return err
+	}
+	newP, err := meta.NewPathFromString(newPath)
+	if err != nil {
+		return err
+	}
+
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		oldB := tx.Bucket([]byte(oldP.Prefix))
+		if oldB == nil {
+			return notFound("prefix bucket", oldPath)
+		}
+
+		// Check if it's a directory (trailing slash in key or isDir attr)
+		isDir := strings.HasSuffix(oldP.Key, "/")
+		if !isDir {
+			data := oldB.Get([]byte(oldP.Key))
+			if data != nil {
+				attr := new(meta.FileAttr)
+				if err := attr.UnmarshalBinary(data); err == nil && attr.IsDir() {
+					isDir = true
+				}
+			}
+		}
+
+		newB, err := tx.CreateBucketIfNotExists([]byte(newP.Prefix))
+		if err != nil {
+			return err
+		}
+
+		if !isDir {
+			data := oldB.Get([]byte(oldP.Key))
+			if data == nil {
+				return notFound("key", oldPath)
+			}
+			if err := newB.Put([]byte(newP.Key), data); err != nil {
+				return err
+			}
+			return oldB.Delete([]byte(oldP.Key))
+		}
+
+		// Handle directory rename: move all keys starting with oldP.Key
+		cursor := oldB.Cursor()
+		prefix := []byte(oldP.Key)
+		for k, v := cursor.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = cursor.Next() {
+			newKey := append([]byte(newP.Key), k[len(prefix):]...)
+			if err := newB.Put(newKey, v); err != nil {
+				return err
+			}
+			if err := oldB.Delete(k); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
 }
 
 func newBoltBlobStore(db *bbolt.DB) (*boltDBBlobStore, error) {

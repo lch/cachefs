@@ -21,5 +21,6 @@ type Store interface {
 	Create(path string) error
 	Remove(path string) error
 	Exists(path string) (bool, error)
+	Rename(oldPath, newPath string) error
 	Close() error
 }
