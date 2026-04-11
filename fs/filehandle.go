@@ -6,7 +6,7 @@ import (
 	"syscall"
 	"time"
 
-	gfs "github.com/hanwen/go-fuse/v2/fs"
+	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/lch/cachefs/internal/meta"
 )
@@ -43,11 +43,11 @@ func (h *CacheFileHandle) touchAtime() error {
 }
 
 var (
-	_ gfs.FileReader    = (*CacheFileHandle)(nil)
-	_ gfs.FileWriter    = (*CacheFileHandle)(nil)
-	_ gfs.FileGetattrer = (*CacheFileHandle)(nil)
-	_ gfs.FileFlusher   = (*CacheFileHandle)(nil)
-	_ gfs.FileReleaser  = (*CacheFileHandle)(nil)
+	_ fs.FileReader    = (*CacheFileHandle)(nil)
+	_ fs.FileWriter    = (*CacheFileHandle)(nil)
+	_ fs.FileGetattrer = (*CacheFileHandle)(nil)
+	_ fs.FileFlusher   = (*CacheFileHandle)(nil)
+	_ fs.FileReleaser  = (*CacheFileHandle)(nil)
 )
 
 func (h *CacheFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
