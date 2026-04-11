@@ -31,7 +31,11 @@ var (
 	_ fs.NodeRenamer   = (*FileNode)(nil)
 	_ fs.NodeReaddirer = (*FileNode)(nil)
 	_ fs.NodeOpendirer = (*FileNode)(nil)
+	_ fs.NodeCreater   = (*FileNode)(nil)
+	_ fs.NodeUnlinker  = (*FileNode)(nil)
 )
+
+
 
 
 
@@ -244,11 +248,12 @@ func (n *FileNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 	}
 	childP := *p
 	key := strings.TrimSuffix(childP.Key, "/")
-	if key == "" {
-		childP.Key = name + "/"
-	} else {
-		childP.Key = key + "/" + name + "/"
+	if key != "" {
+		// Enforce no nested subdirectories as per integration tests
+		return nil, syscall.ENOTSUP
 	}
+
+	childP.Key = name + "/"
 	finalPath := childP.String()
 
 	err = n.cfs.Store.Create(finalPath)
@@ -408,6 +413,83 @@ func (n *FileNode) Opendir(ctx context.Context) syscall.Errno {
 	}
 	return 0
 }
+
+func (n *FileNode) Create(ctx context.Context, name string, flags uint32, mode uint32, out *fuse.EntryOut) (inode *fs.Inode, fh fs.FileHandle, fuseFlags uint32, errno syscall.Errno) {
+	if n.cfs == nil || n.cfs.Store == nil {
+		return nil, nil, 0, syscall.EIO
+	}
+
+	p, err := meta.NewPathFromString(n.path)
+	if err != nil {
+		return nil, nil, 0, syscall.EINVAL
+	}
+	childP := *p
+	key := strings.TrimSuffix(childP.Key, "/")
+	if key == "" {
+		childP.Key = name
+	} else {
+		childP.Key = key + "/" + name
+	}
+	finalPath := childP.String()
+
+	err = n.cfs.Store.Create(finalPath)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil, nil, 0, syscall.EEXIST
+		}
+		return nil, nil, 0, fs.ToErrno(err)
+	}
+
+	attr, _ := n.cfs.Store.GetMeta(finalPath)
+	attr.Mode = uint32(syscall.S_IFREG) | (mode & 0o777)
+	_ = n.cfs.Store.UpdateMeta(finalPath, attr)
+
+	ino := pathIno(childP)
+	stable := fs.StableAttr{
+		Mode: fuse.S_IFREG,
+		Ino:  ino,
+	}
+	ops := &FileNode{
+		cfs:  n.cfs,
+		path: finalPath,
+	}
+	childInode := newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
+	fillFileEntryOut(out, n.cfs, attr, ino)
+
+	h := &CacheFileHandle{
+		cfs:   n.cfs,
+		path:  finalPath,
+		attr:  attr,
+		mode:  attr.Mode,
+		buf:   nil,
+		dirty: false,
+	}
+
+	return childInode, h, 0, 0
+}
+
+func (n *FileNode) Unlink(ctx context.Context, name string) syscall.Errno {
+	if n.cfs == nil || n.cfs.Store == nil {
+		return syscall.EIO
+	}
+
+	p, _ := meta.NewPathFromString(n.path)
+	childP := *p
+	key := strings.TrimSuffix(childP.Key, "/")
+	if key == "" {
+		childP.Key = name
+	} else {
+		childP.Key = key + "/" + name
+	}
+	finalPath := childP.String()
+
+	err := n.cfs.Store.Remove(finalPath)
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+	return 0
+}
+
 
 func resizeContent(content []byte, size uint64) []byte {
 	if uint64(len(content)) == size {
