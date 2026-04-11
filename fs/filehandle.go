@@ -72,10 +72,7 @@ func (h *CacheFileHandle) Read(ctx context.Context, dest []byte, off int64) (fus
 		return fuse.ReadResultData(nil), 0
 	}
 
-	end := off + int64(len(dest))
-	if end > int64(len(h.buf)) {
-		end = int64(len(h.buf))
-	}
+	end := min(off+int64(len(dest)), int64(len(h.buf)))
 
 	return fuse.ReadResultData(h.buf[off:end]), 0
 }
