@@ -27,7 +27,7 @@ func NewPathFromString(path string) (*Path, error) {
 		return &Path{Kind: PathIsRootFolder}, nil
 	} else {
 		prefix, key, _ := strings.Cut(path, "/")
-		if prefix != "" && isHexPrefix(prefix) {
+		if prefix != "" && IsHexPrefix(prefix) {
 			kind := PathIsPrefixFolder
 			if key != "" {
 				if strings.HasSuffix(key, "/") {
@@ -46,7 +46,7 @@ func (p Path) String() string {
 	return fmt.Sprintf("%v/%v", p.Prefix, p.Key)
 }
 
-func isHexPrefix(prefix string) bool {
+func IsHexPrefix(prefix string) bool {
 	if len(prefix) != 2 {
 		return false
 	}

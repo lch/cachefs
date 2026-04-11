@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-
 	"syscall"
 
 	"github.com/lch/cachefs/blob"

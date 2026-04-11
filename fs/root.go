@@ -3,14 +3,15 @@ package fs
 import (
 	"context"
 	"errors"
+	"os"
 	"syscall"
+	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/lch/cachefs/internal/meta"
 	"github.com/lch/cachefs/store"
 )
-
 
 var (
 	_ = (fs.InodeEmbedder)((*RootNode)(nil))
@@ -33,28 +34,17 @@ func NewRootNode(cfs *CacheFS) *RootNode {
 	return &RootNode{cfs: cfs}
 }
 
-// isValidPrefix reports whether name is a 2-character hex prefix.
-func isValidPrefix(name string) bool {
-	if len(name) != 2 {
-		return false
-	}
-	for i := range 2 {
-		c := name[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 func (n *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if !isValidPrefix(name) {
+	if !meta.IsHexPrefix(name) {
 		return nil, syscall.ENOENT
+	}
+	if n.cfs == nil || n.cfs.Store == nil {
+		return nil, syscall.EIO
 	}
 
 	exists, err := n.cfs.Store.Exists(name)
 	if err != nil {
-		return nil, syscall.EIO
+		return nil, fs.ToErrno(err)
 	}
 	if !exists {
 		return nil, syscall.ENOENT
@@ -80,16 +70,19 @@ func (n *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 }
 
 func (n *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
+	if n.cfs == nil || n.cfs.Store == nil {
+		return nil, syscall.EIO
+	}
 	prefixList, err := n.cfs.Store.List("")
 	if err != nil {
 		return nil, syscall.EIO
 	}
 	r := make([]fuse.DirEntry, 0, len(prefixList))
-	for _, v := range prefixList {
+	for _, prefix := range prefixList {
 		d := fuse.DirEntry{
-			Name: v,
-			Ino:  prefixDirIno(v),
-			Mode: meta.DefaultDirMode,
+			Name: prefix,
+			Ino:  prefixDirIno(prefix),
+			Mode: fuse.S_IFDIR,
 		}
 		r = append(r, d)
 	}
@@ -97,13 +90,19 @@ func (n *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 }
 
 func (n *RootNode) Mkdir(ctx context.Context, name string, mode uint32, out *fuse.EntryOut) (*fs.Inode, syscall.Errno) {
-	if !isValidPrefix(name) {
+	if !meta.IsHexPrefix(name) {
 		return nil, syscall.EINVAL
+	}
+	if n.cfs == nil || n.cfs.Store == nil {
+		return nil, syscall.EIO
 	}
 
 	err := n.cfs.Store.Create(name)
 	if err != nil {
-		return nil, syscall.EIO
+		if errors.Is(err, os.ErrExist) {
+			return nil, syscall.EEXIST
+		}
+		return nil, fs.ToErrno(err)
 	}
 
 	ino := prefixDirIno(name)
@@ -121,8 +120,11 @@ func (n *RootNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 }
 
 func (n *RootNode) Rmdir(ctx context.Context, name string) syscall.Errno {
-	if !isValidPrefix(name) {
+	if !meta.IsHexPrefix(name) {
 		return syscall.EINVAL
+	}
+	if n.cfs == nil || n.cfs.Store == nil {
+		return syscall.EIO
 	}
 	err := n.cfs.Store.Remove(name)
 	if err != nil {
@@ -135,20 +137,39 @@ func (n *RootNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 }
 
 func (n *RootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
+	if n.cfs == nil {
+		return syscall.EIO
+	}
+
+	now := time.Now()
 	out.Mode = fuse.S_IFDIR | 0o755
 	out.Uid = n.cfs.Uid
 	out.Gid = n.cfs.Gid
 	out.Ino = InodeRoot
+	out.SetTimes(&now, &now, &now)
 	return 0
 }
 
 func (n *RootNode) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
-	out.Blocks = 100 * 1024 * 1024 // 100M blocks
-	out.Bfree = 80 * 1024 * 1024   // 80M free
-	out.Bavail = 80 * 1024 * 1024  // 80M available
-	out.Files = 10 * 1024 * 1024   // 10M files
-	out.Ffree = 9 * 1024 * 1024    // 9M free files
-	out.Bsize = 4096               // 4K block size
+	prefixes, err := n.cfs.Store.List("")
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+	var fileCount uint64
+	for _, prefix := range prefixes {
+		files, err := n.cfs.Store.List(prefix)
+		if err != nil {
+			return fs.ToErrno(err)
+		}
+		fileCount += uint64(len(files))
+	}
+	out.Bsize = meta.DefaultBlockSize
+	out.Frsize = meta.DefaultBlockSize
+	out.Blocks = 1 // 100M blocks
+	out.Bfree = 1  // 80M free
+	out.Bavail = 1 // 80M available
+	out.Files = fileCount
+	out.Ffree = 1 // 9M free files
 	out.NameLen = 255
 	return 0
 }
