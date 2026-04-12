@@ -219,7 +219,7 @@ func (n *FileNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 	if n.cfs == nil || n.cfs.Store == nil {
 		return nil, syscall.EIO
 	}
-	childKey := fmt.Sprintf("%s/%s/", n.path.Key, name)
+	childKey := meta.ChildKey(n.path, name)
 	childP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: n.path.Prefix, Key: childKey}
 
 	err := n.cfs.Store.Create(childP)
@@ -253,7 +253,7 @@ func (n *FileNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		return syscall.EIO
 	}
 
-	childKey := fmt.Sprintf("%s/%s/", n.path.Key, name)
+	childKey := meta.ChildKey(n.path, name)
 	childP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: n.path.Prefix, Key: childKey}
 
 	err := n.cfs.Store.Delete(childP)
@@ -349,7 +349,7 @@ func (n *FileNode) Create(ctx context.Context, name string, flags uint32, mode u
 		return nil, nil, 0, syscall.EIO
 	}
 
-	childKey := fmt.Sprintf("%s/%s", n.path.Key, name)
+	childKey := meta.ChildKey(n.path, name)
 	childP := meta.Path{Kind: meta.PathIsFile, Prefix: n.path.Prefix, Key: childKey}
 
 	err := n.cfs.Store.Create(childP)
@@ -393,7 +393,7 @@ func (n *FileNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		return syscall.EIO
 	}
 
-	childKey := fmt.Sprintf("%s/%s", n.path.Key, name)
+	childKey := meta.ChildKey(n.path, name)
 	childP := meta.Path{Kind: meta.PathIsFile, Prefix: n.path.Prefix, Key: childKey}
 
 	err := n.cfs.Store.Delete(childP)
