@@ -32,7 +32,8 @@ type BlobFile struct {
 }
 
 type BlobFileMeta struct {
-	RecycledBlocks []uint64
+	AllocatedBlocks uint64
+	RecycledBlocks  []uint64
 }
 
 // NewBlobManager returns a manager rooted at dir.
@@ -61,6 +62,12 @@ func (m *BlobManager) openOrCreateLocked(prefix string) (*BlobFile, error) {
 	if err != nil {
 		_ = f.Close()
 		return nil, err
+	}
+	if bfm.AllocatedBlocks == 0 && info.Size() > 0 {
+		bfm.AllocatedBlocks = uint64(info.Size() / meta.DefaultBlockSize)
+		if info.Size()%int64(meta.DefaultBlockSize) != 0 {
+			bfm.AllocatedBlocks++
+		}
 	}
 	return &BlobFile{f: f, size: uint64(info.Size()), BlobFileMeta: bfm}, nil
 }
@@ -214,6 +221,7 @@ func (m *BlobFileMeta) Save(prefix string, db *bbolt.DB) (err error) {
 }
 
 func (m *BlobFileMeta) MarshalBinary() (data []byte, err error) {
+	data = binary.LittleEndian.AppendUint64(data, m.AllocatedBlocks)
 	data = binary.LittleEndian.AppendUint64(data, uint64(len(m.RecycledBlocks)))
 	for _, blockInd := range m.RecycledBlocks {
 		data = binary.LittleEndian.AppendUint64(data, blockInd)
@@ -222,12 +230,16 @@ func (m *BlobFileMeta) MarshalBinary() (data []byte, err error) {
 }
 
 func (m *BlobFileMeta) UnmarshalBinary(data []byte) (err error) {
-	var length uint64
 	buf := bytes.NewReader(data)
+	if err := binary.Read(buf, binary.LittleEndian, &m.AllocatedBlocks); err != nil {
+		return err
+	}
+	var length uint64
 	err = binary.Read(buf, binary.LittleEndian, &length)
 	if err != nil {
 		return err
 	}
+	m.RecycledBlocks = make([]uint64, 0, length)
 	for i := 0; i < int(length); i++ {
 		var blockInd uint64
 		err = binary.Read(buf, binary.LittleEndian, &blockInd)

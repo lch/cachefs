@@ -23,7 +23,7 @@ type CacheFileHandle struct {
 	dirty bool
 }
 
-func (h *CacheFileHandle) touchAtime(locked bool) error {
+func (h *CacheFileHandle) touchAtime() error {
 	if h == nil || h.cfs == nil || h.cfs.Store == nil {
 		return nil
 	}
@@ -31,15 +31,14 @@ func (h *CacheFileHandle) touchAtime(locked bool) error {
 	if err != nil {
 		return err
 	}
-	attr.Atime = time.Now().Unix()
+	attr.Atime = time.Now().UnixNano()
 	if err := h.cfs.Store.UpdateMeta(h.path, attr); err != nil {
 		return err
 	}
 
-	if !locked {
-		h.mu.Lock()
-		defer h.mu.Unlock()
-	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
 	attrCopy := *attr
 	h.attr = &attrCopy
 	return nil
@@ -66,7 +65,7 @@ func (h *CacheFileHandle) Read(ctx context.Context, dest []byte, off int64) (fus
 		h.attr = attr
 	}
 
-	_ = h.touchAtime(true)
+	_ = h.touchAtime()
 
 	if off >= int64(len(h.buf)) {
 		return fuse.ReadResultData(nil), 0

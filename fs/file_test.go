@@ -84,3 +84,102 @@ func readResultBytes(t *testing.T, rr fuse.ReadResult) []byte {
 	}
 	return append([]byte(nil), got...)
 }
+
+func TestFileNode_FlushFsync(t *testing.T) {
+	root, st := newTestRoot(t)
+	ctx := context.Background()
+
+	// 1. Create a prefix directory via RootNode
+	prefix := "01"
+	_, errno := root.Mkdir(ctx, prefix, 0o755, &fuse.EntryOut{})
+	if errno != 0 {
+		t.Fatalf("Mkdir failed: %v", errno)
+	}
+
+	// 2. Create prefix node manually for testing
+	prefixNode := &FileNode{
+		cfs:  root.cfs,
+		path: meta.Path{Prefix: prefix, Key: "", Kind: meta.PathIsPrefixFolder},
+	}
+
+	// 3. Create a file via prefixNode
+	fileName := "testfile"
+	var out fuse.EntryOut
+	_, fh, _, errno := prefixNode.Create(ctx, fileName, 0, 0o644, &out)
+	if errno != 0 {
+		t.Fatalf("Create failed: %v", errno)
+	}
+	h := fh.(*CacheFileHandle)
+
+	// Create the FileNode manually for testing methods
+	fnode := &FileNode{
+		cfs:  root.cfs,
+		path: h.path,
+	}
+
+	// 4. Write some data to the handle (buffer)
+	data := []byte("hello world")
+	_, errno = h.Write(ctx, data, 0)
+	if errno != 0 {
+		t.Fatalf("Write failed: %v", errno)
+	}
+
+	// 5. Verify it's NOT in the store yet (since Flush hasn't been called)
+	p := h.path
+	gotData, _, err := st.Read(p)
+	// In BoltDB store, if it doesn't exist it returns an error
+	if err == nil && len(gotData) > 0 {
+		t.Errorf("Data should not be in store yet")
+	}
+
+	// 6. Call Flush on the node
+	errno = fnode.Flush(ctx, fh)
+	if errno != 0 {
+		t.Fatalf("Flush failed: %v", errno)
+	}
+
+	// 7. Verify it IS in the store now
+	gotData, _, err = st.Read(p)
+	if err != nil {
+		t.Fatalf("Read from store failed: %v", err)
+	}
+	if string(gotData) != string(data) {
+		t.Errorf("Got data %q, want %q", string(gotData), string(data))
+	}
+
+	// 8. Write more data
+	data2 := []byte("foobar")
+	_, errno = h.Write(ctx, data2, int64(len(data)))
+	if errno != 0 {
+		t.Fatalf("Write2 failed: %v", errno)
+	}
+
+	// 9. Call Fsync on the node
+	errno = fnode.Fsync(ctx, fh, 0)
+	if errno != 0 {
+		t.Fatalf("Fsync failed: %v", errno)
+	}
+
+	// 10. Verify it IS in the store now
+	gotData, _, err = st.Read(p)
+	if err != nil {
+		t.Fatalf("Read from store failed: %v", err)
+	}
+	expected := string(data) + string(data2)
+	if string(gotData) != expected {
+		t.Errorf("Got data %q, want %q", string(gotData), expected)
+	}
+}
+
+func TestFileNode_FlushFsync_NilHandle(t *testing.T) {
+	root, _ := newTestRoot(t)
+	ctx := context.Background()
+	fnode := &FileNode{cfs: root.cfs}
+
+	if errno := fnode.Flush(ctx, nil); errno != 0 {
+		t.Errorf("Flush(nil) = %v, want 0", errno)
+	}
+	if errno := fnode.Fsync(ctx, nil, 0); errno != 0 {
+		t.Errorf("Fsync(nil) = %v, want 0", errno)
+	}
+}

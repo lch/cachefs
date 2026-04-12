@@ -32,6 +32,8 @@ var (
 	_ fs.NodeOpendirer = (*FileNode)(nil)
 	_ fs.NodeCreater   = (*FileNode)(nil)
 	_ fs.NodeUnlinker  = (*FileNode)(nil)
+	_ fs.NodeFlusher   = (*FileNode)(nil)
+	_ fs.NodeFsyncer   = (*FileNode)(nil)
 )
 
 func (n *FileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
@@ -57,7 +59,7 @@ func (n *FileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint3
 		mode: attr.Mode,
 		buf:  data,
 	}
-	return h, fuse.FOPEN_KEEP_CACHE, 0
+	return h, fuse.FOPEN_DIRECT_IO, 0
 }
 
 func (n *FileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.AttrOut) syscall.Errno {
@@ -126,15 +128,15 @@ func (n *FileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAt
 		changed = true
 	}
 	if atime, ok := in.GetATime(); ok {
-		updated.Atime = atime.Unix()
+		updated.Atime = atime.UnixNano()
 		changed = true
 	}
 	if mtime, ok := in.GetMTime(); ok {
-		updated.Mtime = mtime.Unix()
+		updated.Mtime = mtime.UnixNano()
 		changed = true
 	}
 	if ctime, ok := in.GetCTime(); ok {
-		updated.Ctime = ctime.Unix()
+		updated.Ctime = ctime.UnixNano()
 		changed = true
 	}
 	if changed {
@@ -438,6 +440,26 @@ func (n *FileNode) Unlink(ctx context.Context, name string) syscall.Errno {
 	err := n.cfs.Store.Delete(childP)
 	if err != nil {
 		return fs.ToErrno(err)
+	}
+	return 0
+}
+
+func (n *FileNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.Errno {
+	if n.cfs == nil || n.cfs.Store == nil {
+		return syscall.EIO
+	}
+	if h, ok := fh.(*CacheFileHandle); ok && h != nil {
+		return h.Flush(ctx)
+	}
+	return 0
+}
+
+func (n *FileNode) Fsync(ctx context.Context, fh fs.FileHandle, flags uint32) syscall.Errno {
+	if n.cfs == nil || n.cfs.Store == nil {
+		return syscall.EIO
+	}
+	if h, ok := fh.(*CacheFileHandle); ok && h != nil {
+		return h.Flush(ctx)
 	}
 	return 0
 }

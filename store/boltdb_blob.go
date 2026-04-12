@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/lch/cachefs/blob"
 	"github.com/lch/cachefs/internal/meta"
@@ -108,12 +109,18 @@ func (s *boltDBBlobStore) Write(p meta.Path, data []byte, mode uint32) error {
 		return err
 	}
 
+	now := time.Now().UnixNano()
 	if attr == nil {
 		attr = &meta.FileAttr{
-			Mode: mode,
+			Mode:  mode,
+			Atime: now,
+			Mtime: now,
+			Ctime: now,
 		}
 	} else {
 		attr.Mode = mode
+		attr.Mtime = now
+		attr.Ctime = now
 	}
 	attr.Length = uint64(len(data))
 	attr.Blocks = uint64(len(blocks))
@@ -309,7 +316,10 @@ func (s *boltDBBlobStore) Truncate(p meta.Path, newSize uint64) error {
 		}
 	}
 
+	now := time.Now().UnixNano()
 	attr.Length = newSize
+	attr.Mtime = now
+	attr.Ctime = now
 	attr.Blocks = uint64(len(attr.BlockIndices))
 	return s.UpdateMeta(p, attr)
 }
@@ -640,21 +650,12 @@ func (s *boltDBBlobStore) allocateBlocks(prefix string, needed int) ([]uint64, e
 	}
 
 	if len(blocks) < needed {
-		path := filepath.Join(s.dir, prefix)
-		info, err := os.Stat(path)
-		var currentSize int64
-		if err == nil {
-			currentSize = info.Size()
-		}
-		nextBlock := uint64(currentSize / meta.DefaultBlockSize)
-		if currentSize%meta.DefaultBlockSize != 0 {
-			nextBlock++
-		}
-
+		nextBlock := bm.AllocatedBlocks
 		for len(blocks) < needed {
 			blocks = append(blocks, nextBlock)
 			nextBlock++
 		}
+		bm.AllocatedBlocks = nextBlock
 	}
 
 	err := bm.Save(prefix, s.db)

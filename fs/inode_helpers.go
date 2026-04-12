@@ -73,13 +73,13 @@ func fillFileEntryOut(out *fuse.EntryOut, cfs *CacheFS, attr *meta.FileAttr, ino
 	mtime := now
 	ctime := now
 	if attr.Atime != 0 {
-		atime = time.Unix(attr.Atime, 0)
+		atime = time.Unix(0, attr.Atime)
 	}
 	if attr.Mtime != 0 {
-		mtime = time.Unix(attr.Mtime, 0)
+		mtime = time.Unix(0, attr.Mtime)
 	}
 	if attr.Ctime != 0 {
-		ctime = time.Unix(attr.Ctime, 0)
+		ctime = time.Unix(0, attr.Ctime)
 	}
 	if attr.IsDir() {
 		out.Mode = fuse.S_IFDIR | perm
@@ -89,8 +89,8 @@ func fillFileEntryOut(out *fuse.EntryOut, cfs *CacheFS, attr *meta.FileAttr, ino
 		out.Nlink = 1
 	}
 	out.Size = attr.Length
-	out.Blocks = (attr.Length + 511) / 512
-	out.Blksize = 4096
+	out.Blocks = attr.Blocks
+	out.Blksize = meta.DefaultBlockSize
 	out.Uid = attr.Uid
 	out.Gid = attr.Gid
 	out.Ino = ino
@@ -108,9 +108,19 @@ func fillFileAttrOut(out *fuse.AttrOut, cfs *CacheFS, attr *meta.FileAttr, ino u
 		perm = meta.DefaultFileMode
 	}
 
-	atime := time.Unix(attr.Atime, 0)
-	mtime := time.Unix(attr.Mtime, 0)
-	ctime := time.Unix(attr.Ctime, 0)
+	now := time.Now()
+	atime := now
+	mtime := now
+	ctime := now
+	if attr.Atime != 0 {
+		atime = time.Unix(0, attr.Atime)
+	}
+	if attr.Mtime != 0 {
+		mtime = time.Unix(0, attr.Mtime)
+	}
+	if attr.Ctime != 0 {
+		ctime = time.Unix(0, attr.Ctime)
+	}
 	if attr.IsDir() {
 		out.Mode = fuse.S_IFDIR | perm
 		out.Nlink = 2
@@ -119,8 +129,8 @@ func fillFileAttrOut(out *fuse.AttrOut, cfs *CacheFS, attr *meta.FileAttr, ino u
 		out.Nlink = 1
 	}
 	out.Size = attr.Length
-	out.Blocks = (attr.Length + 511) / 512
-	out.Blksize = 4096
+	out.Blocks = attr.Blocks
+	out.Blksize = meta.DefaultBlockSize
 	out.Uid = attr.Uid
 	out.Gid = attr.Gid
 	out.Ino = ino
