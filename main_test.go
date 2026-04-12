@@ -230,6 +230,58 @@ func TestIntegrationFilesystem(t *testing.T) {
 			}
 		}()
 	})
+
+	t.Run("stat-cache-expiry", func(t *testing.T) {
+		withMountedFS(t, func(mount string) {
+			prefix := filepath.Join(mount, "aa")
+			file := filepath.Join(prefix, "stat.txt")
+			mustMkdir(t, prefix)
+			want := []byte("stat test payload")
+			mustWriteFile(t, file, want)
+
+			info1, err := os.Stat(file)
+			if err != nil {
+				t.Fatalf("first stat failed: %v", err)
+			}
+			if info1.Size() != int64(len(want)) {
+				t.Fatalf("first stat size = %d, want %d", info1.Size(), len(want))
+			}
+
+			// Wait for the FUSE EntryTimeout/AttrTimeout (1 second) to expire
+			time.Sleep(1500 * time.Millisecond)
+
+			info2, err := os.Stat(file)
+			if err != nil {
+				t.Fatalf("second stat failed: %v", err)
+			}
+			if info2.Size() == 0 {
+				t.Fatalf("second stat size is 0! FUSE entryout lookup was likely bypassed")
+			}
+			if info2.Size() != int64(len(want)) {
+				t.Fatalf("second stat size = %d, want %d", info2.Size(), len(want))
+			}
+			if info1.ModTime() != info2.ModTime() {
+				t.Errorf("modtime changed after cache expiry: %v vs %v", info1.ModTime(), info2.ModTime())
+			}
+		})
+	})
+
+	t.Run("read-no-deadlock", func(t *testing.T) {
+		withMountedFS(t, func(mount string) {
+			prefix := filepath.Join(mount, "bb")
+			file := filepath.Join(prefix, "deadlock.txt")
+			mustMkdir(t, prefix)
+
+			payload := []byte("hello world")
+			mustWriteFile(t, file, payload)
+
+			// Simple os.ReadFile wraps explicit Open/Read/Close.
+			// This covers the exact interaction that triggered the double mutex lock.
+			if got := mustReadFile(t, file); !reflect.DeepEqual(got, payload) {
+				t.Fatalf("ReadFile = %q, want %q", got, payload)
+			}
+		})
+	})
 }
 
 func withMountedFSAndStore(t *testing.T, fn func(mount, backendDir string, st store.Store)) {

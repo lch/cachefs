@@ -196,6 +196,11 @@ func (n *FileNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	ino := pathIno(childP)
 	child := n.GetChild(name)
 	if child != nil {
+		if attr.IsDir() {
+			fillDirEntryOut(out, n.cfs, attr.Mode, ino)
+		} else {
+			fillFileEntryOut(out, n.cfs, attr, ino)
+		}
 		return child, 0
 	}
 

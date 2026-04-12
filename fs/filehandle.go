@@ -36,9 +36,6 @@ func (h *CacheFileHandle) touchAtime() error {
 		return err
 	}
 
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
 	attrCopy := *attr
 	h.attr = &attrCopy
 	return nil

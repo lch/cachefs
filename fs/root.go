@@ -55,6 +55,7 @@ func (n *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	ino := prefixDirIno(name)
 	child := n.GetChild(name)
 	if child != nil {
+		fillDirEntryOut(out, n.cfs, fuse.S_IFDIR|meta.DefaultDirMode, ino)
 		return child, 0
 	}
 
