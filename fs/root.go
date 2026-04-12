@@ -42,7 +42,8 @@ func (n *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return nil, syscall.EIO
 	}
 
-	exists, err := n.cfs.Store.Exists(name)
+	path := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: name}
+	exists, err := n.cfs.Store.Exists(path)
 	if err != nil {
 		return nil, fs.ToErrno(err)
 	}
@@ -62,7 +63,7 @@ func (n *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	}
 	ops := &FileNode{
 		cfs:  n.cfs,
-		path: name,
+		path: path,
 	}
 	child = newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
 	fillDirEntryOut(out, n.cfs, fuse.S_IFDIR|meta.DefaultDirMode, ino)
@@ -73,7 +74,9 @@ func (n *RootNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	if n.cfs == nil || n.cfs.Store == nil {
 		return nil, syscall.EIO
 	}
-	prefixList, err := n.cfs.Store.List("")
+	prefixList, err := n.cfs.Store.List(
+		meta.Path{Kind: meta.PathIsRootFolder},
+	)
 	if err != nil {
 		return nil, syscall.EIO
 	}
@@ -97,7 +100,8 @@ func (n *RootNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 		return nil, syscall.EIO
 	}
 
-	err := n.cfs.Store.Create(name)
+	path := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: name, Key: ""}
+	err := n.cfs.Store.Create(path)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, syscall.EEXIST
@@ -112,7 +116,7 @@ func (n *RootNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 	}
 	ops := &FileNode{
 		cfs:  n.cfs,
-		path: name,
+		path: path,
 	}
 	child := newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
 	fillDirEntryOut(out, n.cfs, fuse.S_IFDIR|(mode&0o777), ino)
@@ -126,9 +130,10 @@ func (n *RootNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 	if n.cfs == nil || n.cfs.Store == nil {
 		return syscall.EIO
 	}
-	err := n.cfs.Store.Remove(name)
+	path := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: name, Key: ""}
+	err := n.cfs.Store.Delete(path)
 	if err != nil {
-		if errors.Is(err, store.ErrPrefixNotEmpty) {
+		if errors.Is(err, store.ErrFolderNotEmpty) {
 			return syscall.ENOTEMPTY
 		}
 		return syscall.EIO
@@ -151,13 +156,15 @@ func (n *RootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Attr
 }
 
 func (n *RootNode) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
-	prefixes, err := n.cfs.Store.List("")
+	prefixes, err := n.cfs.Store.List(meta.Path{Kind: meta.PathIsRootFolder})
 	if err != nil {
 		return fs.ToErrno(err)
 	}
 	var fileCount uint64
 	for _, prefix := range prefixes {
-		files, err := n.cfs.Store.List(prefix)
+		files, err := n.cfs.Store.List(
+			meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: prefix},
+		)
 		if err != nil {
 			return fs.ToErrno(err)
 		}

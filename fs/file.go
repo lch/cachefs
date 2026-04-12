@@ -3,6 +3,7 @@ package fs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"syscall"
@@ -13,12 +14,11 @@ import (
 	"github.com/lch/cachefs/store"
 )
 
-
 // FileNode represents a cached regular file or directory inside a prefix directory.
 type FileNode struct {
 	fs.Inode
 	cfs  *CacheFS
-	path string
+	path meta.Path
 }
 
 var (
@@ -34,10 +34,6 @@ var (
 	_ fs.NodeCreater   = (*FileNode)(nil)
 	_ fs.NodeUnlinker  = (*FileNode)(nil)
 )
-
-
-
-
 
 func (n *FileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	if n.cfs == nil || n.cfs.Store == nil {
@@ -79,8 +75,7 @@ func (n *FileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Attr
 		}
 		return fs.ToErrno(err)
 	}
-	p, _ := meta.NewPathFromString(n.path)
-	fillFileAttrOut(out, n.cfs, attr, pathIno(*p))
+	fillFileAttrOut(out, n.cfs, attr, pathIno(n.path))
 	return 0
 }
 
@@ -152,8 +147,7 @@ func (n *FileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAt
 		}
 		attr = &updated
 	}
-	p, _ := meta.NewPathFromString(n.path)
-	fillFileAttrOut(out, n.cfs, attr, pathIno(*p))
+	fillFileAttrOut(out, n.cfs, attr, pathIno(n.path))
 	if fh != nil {
 		if handle, ok := fh.(*CacheFileHandle); ok {
 			handle.mu.Lock()
@@ -171,40 +165,24 @@ func (n *FileNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return nil, syscall.EIO
 	}
 
-	p, err := meta.NewPathFromString(n.path)
-	if err != nil {
+	if !n.IsDir() {
 		return nil, syscall.EINVAL
 	}
-	childP := *p
-	if childP.Key == "" {
-		childP.Key = name
-	} else {
-		// If n.path is a directory it might have a trailing slash
-		key := strings.TrimSuffix(childP.Key, "/")
-		childP.Key = key + "/" + name
-	}
 
-	finalPath := childP.String()
-	exists, err := n.cfs.Store.Exists(finalPath)
+	childP := n.path
+	newKey := fmt.Sprintf("%s/%s", childP.Key, name)
+	childP.Key = newKey
+
+	exists, err := n.cfs.Store.Exists(childP)
 	if err != nil {
 		return nil, fs.ToErrno(err)
-	}
-	if !exists {
-		// Try with trailing slash if it's a directory
-		if !strings.HasSuffix(finalPath, "/") {
-			finalPath += "/"
-			exists, _ = n.cfs.Store.Exists(finalPath)
-			if exists {
-				childP.Key += "/"
-			}
-		}
 	}
 
 	if !exists {
 		return nil, syscall.ENOENT
 	}
 
-	attr, err := n.cfs.Store.GetMeta(finalPath)
+	attr, err := n.cfs.Store.GetMeta(childP)
 	if err != nil {
 		return nil, fs.ToErrno(err)
 	}
@@ -226,7 +204,7 @@ func (n *FileNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 
 	ops := &FileNode{
 		cfs:  n.cfs,
-		path: finalPath,
+		path: childP,
 	}
 	child = newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
 	if attr.IsDir() {
@@ -241,22 +219,14 @@ func (n *FileNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 	if n.cfs == nil || n.cfs.Store == nil {
 		return nil, syscall.EIO
 	}
-
-	p, err := meta.NewPathFromString(n.path)
-	if err != nil {
+	if !n.IsDir() {
 		return nil, syscall.EINVAL
 	}
-	childP := *p
-	key := strings.TrimSuffix(childP.Key, "/")
-	if key != "" {
-		// Enforce no nested subdirectories as per integration tests
-		return nil, syscall.ENOTSUP
-	}
 
-	childP.Key = name + "/"
-	finalPath := childP.String()
+	childKey := fmt.Sprintf("%s/%s", n.path.Key, name)
+	childP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: n.path.Prefix, Key: childKey}
 
-	err = n.cfs.Store.Create(finalPath)
+	err := n.cfs.Store.Create(childP)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, syscall.EEXIST
@@ -264,9 +234,9 @@ func (n *FileNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 		return nil, fs.ToErrno(err)
 	}
 
-	attr, _ := n.cfs.Store.GetMeta(finalPath)
+	attr, _ := n.cfs.Store.GetMeta(childP)
 	attr.Mode = uint32(syscall.S_IFDIR) | (mode & 0o777)
-	_ = n.cfs.Store.UpdateMeta(finalPath, attr)
+	_ = n.cfs.Store.UpdateMeta(childP, attr)
 
 	ino := pathIno(childP)
 	stable := fs.StableAttr{
@@ -275,7 +245,7 @@ func (n *FileNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 	}
 	ops := &FileNode{
 		cfs:  n.cfs,
-		path: finalPath,
+		path: childP,
 	}
 	child := newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
 	fillDirEntryOut(out, n.cfs, attr.Mode, ino)
@@ -287,19 +257,12 @@ func (n *FileNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		return syscall.EIO
 	}
 
-	p, _ := meta.NewPathFromString(n.path)
-	childP := *p
-	key := strings.TrimSuffix(childP.Key, "/")
-	if key == "" {
-		childP.Key = name + "/"
-	} else {
-		childP.Key = key + "/" + name + "/"
-	}
-	finalPath := childP.String()
+	childKey := fmt.Sprintf("%s/%s/", n.path.Key, name)
+	childP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: n.path.Prefix, Key: childKey}
 
-	err := n.cfs.Store.Remove(finalPath)
+	err := n.cfs.Store.Delete(childP)
 	if err != nil {
-		if errors.Is(err, store.ErrPrefixNotEmpty) {
+		if errors.Is(err, store.ErrFolderNotEmpty) {
 			return syscall.ENOTEMPTY
 		}
 		return fs.ToErrno(err)
@@ -312,51 +275,30 @@ func (n *FileNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 		return syscall.EIO
 	}
 
-	p, _ := meta.NewPathFromString(n.path)
-	oldChildP := *p
-	oldKey := strings.TrimSuffix(oldChildP.Key, "/")
-	if oldKey == "" {
-		oldChildP.Key = name
-	} else {
-		oldChildP.Key = oldKey + "/" + name
-	}
-	oldPath := oldChildP.String()
-
+	oldChildKey := fmt.Sprintf("%s/%s/", n.path.Key, name)
+	oldChildP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: n.path.Prefix, Key: oldChildKey}
 	// Check if oldPath is dir
 	isDir := false
-	if exists, _ := n.cfs.Store.Exists(oldPath + "/"); exists {
-		oldChildP.Key += "/"
-		oldPath += "/"
+	if exists, _ := n.cfs.Store.Exists(oldChildP); exists {
 		isDir = true
-	}
-
-	targetNode, ok := newParent.(*FileNode)
-	if !ok {
-		// Might be root node
-		if rn, ok := newParent.(*RootNode); ok {
-			targetNode = &FileNode{cfs: rn.cfs, path: ""}
-		} else {
-			return syscall.EXDEV
-		}
-	}
-
-	targetP, _ := meta.NewPathFromString(targetNode.path)
-	newChildP := *targetP
-	newKey := strings.TrimSuffix(newChildP.Key, "/")
-	if newKey == "" {
-		newChildP.Key = newName
 	} else {
-		newChildP.Key = newKey + "/" + newName
+		oldChildP.Key = strings.TrimSuffix(oldChildP.Key, "/")
+		oldChildP.Kind = meta.PathIsFile
 	}
-	if isDir {
-		newChildP.Key += "/"
-	}
-	newPath := newChildP.String()
 
-	if err := n.cfs.Store.Rename(oldPath, newPath); err != nil {
+	_, ok := newParent.(*FileNode)
+	if !ok {
+		return syscall.EXDEV
+	}
+
+	newChildKey := fmt.Sprintf("%s/%s", n.path.Key, newName)
+	if isDir {
+		newChildKey = newChildKey + "/"
+	}
+	newChildP := meta.Path{Kind: oldChildP.Kind, Prefix: n.path.Prefix, Key: newChildKey}
+	if err := n.cfs.Store.Rename(oldChildP, newChildP); err != nil {
 		return fs.ToErrno(err)
 	}
-
 	return 0
 }
 
@@ -371,21 +313,13 @@ func (n *FileNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 
 	r := make([]fuse.DirEntry, 0, len(list))
 	for _, entryName := range list {
-		p, _ := meta.NewPathFromString(n.path)
-		childP := *p
-		key := strings.TrimSuffix(childP.Key, "/")
-		if key == "" {
-			childP.Key = entryName
-		} else {
-			childP.Key = key + "/" + entryName
-		}
-
+		childP := n.path
 		d := fuse.DirEntry{
 			Name: strings.TrimSuffix(entryName, "/"),
 			Ino:  pathIno(childP),
 		}
 
-		attr, err := n.cfs.Store.GetMeta(childP.String())
+		attr, err := n.cfs.Store.GetMeta(childP)
 		if err == nil {
 			d.Mode = attr.Mode
 		} else {
@@ -419,20 +353,10 @@ func (n *FileNode) Create(ctx context.Context, name string, flags uint32, mode u
 		return nil, nil, 0, syscall.EIO
 	}
 
-	p, err := meta.NewPathFromString(n.path)
-	if err != nil {
-		return nil, nil, 0, syscall.EINVAL
-	}
-	childP := *p
-	key := strings.TrimSuffix(childP.Key, "/")
-	if key == "" {
-		childP.Key = name
-	} else {
-		childP.Key = key + "/" + name
-	}
-	finalPath := childP.String()
+	childKey := fmt.Sprintf("%s/%s", n.path.Key, name)
+	childP := meta.Path{Kind: meta.PathIsFile, Prefix: n.path.Prefix, Key: childKey}
 
-	err = n.cfs.Store.Create(finalPath)
+	err := n.cfs.Store.Create(childP)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, nil, 0, syscall.EEXIST
@@ -440,9 +364,9 @@ func (n *FileNode) Create(ctx context.Context, name string, flags uint32, mode u
 		return nil, nil, 0, fs.ToErrno(err)
 	}
 
-	attr, _ := n.cfs.Store.GetMeta(finalPath)
+	attr, _ := n.cfs.Store.GetMeta(childP)
 	attr.Mode = uint32(syscall.S_IFREG) | (mode & 0o777)
-	_ = n.cfs.Store.UpdateMeta(finalPath, attr)
+	_ = n.cfs.Store.UpdateMeta(childP, attr)
 
 	ino := pathIno(childP)
 	stable := fs.StableAttr{
@@ -451,14 +375,14 @@ func (n *FileNode) Create(ctx context.Context, name string, flags uint32, mode u
 	}
 	ops := &FileNode{
 		cfs:  n.cfs,
-		path: finalPath,
+		path: childP,
 	}
 	childInode := newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
 	fillFileEntryOut(out, n.cfs, attr, ino)
 
 	h := &CacheFileHandle{
 		cfs:   n.cfs,
-		path:  finalPath,
+		path:  childP,
 		attr:  attr,
 		mode:  attr.Mode,
 		buf:   nil,
@@ -473,23 +397,15 @@ func (n *FileNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		return syscall.EIO
 	}
 
-	p, _ := meta.NewPathFromString(n.path)
-	childP := *p
-	key := strings.TrimSuffix(childP.Key, "/")
-	if key == "" {
-		childP.Key = name
-	} else {
-		childP.Key = key + "/" + name
-	}
-	finalPath := childP.String()
+	childKey := fmt.Sprintf("%s/%s", n.path.Key, name)
+	childP := meta.Path{Kind: meta.PathIsFile, Prefix: n.path.Prefix, Key: childKey}
 
-	err := n.cfs.Store.Remove(finalPath)
+	err := n.cfs.Store.Delete(childP)
 	if err != nil {
 		return fs.ToErrno(err)
 	}
 	return 0
 }
-
 
 func resizeContent(content []byte, size uint64) []byte {
 	if uint64(len(content)) == size {

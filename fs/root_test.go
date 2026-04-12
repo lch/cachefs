@@ -6,23 +6,24 @@ import (
 	"testing"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/lch/cachefs/internal/meta"
 	"github.com/lch/cachefs/store"
 )
-
 
 func TestRootNode_Lookup(t *testing.T) {
 	root, st := newTestRoot(t)
 	ctx := context.Background()
 
+	prefix := "01"
 	var out fuse.EntryOut
 	// Test lookup non-existent
-	_, errno := root.Lookup(ctx, "01", &out)
+	_, errno := root.Lookup(ctx, prefix, &out)
 	if errno == 0 {
 		t.Errorf("expected error for non-existent prefix")
 	}
 
 	// Create it
-	err := st.Create("01")
+	err := st.Create(meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: prefix})
 	if err != nil {
 		t.Fatalf("failed to create prefix: %v", err)
 	}
@@ -50,8 +51,9 @@ func TestRootNode_Mkdir(t *testing.T) {
 	root, st := newTestRoot(t)
 	ctx := context.Background()
 
+	prefix := "aa"
 	var out fuse.EntryOut
-	child, errno := root.Mkdir(ctx, "aa", 0755, &out)
+	child, errno := root.Mkdir(ctx, prefix, 0o755, &out)
 	if errno != 0 {
 		t.Fatalf("mkdir failed: %v", errno)
 	}
@@ -59,13 +61,13 @@ func TestRootNode_Mkdir(t *testing.T) {
 		t.Errorf("mkdir returned nil child")
 	}
 
-	exists, _ := st.Exists("aa")
+	exists, _ := st.Exists(meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: prefix})
 	if !exists {
 		t.Errorf("prefix not created in store")
 	}
 
 	// Test Mkdir existing
-	_, errno = root.Mkdir(ctx, "aa", 0755, &out)
+	_, errno = root.Mkdir(ctx, "aa", 0o755, &out)
 	if errno != syscall.EEXIST {
 		t.Errorf("expected EEXIST, got %v", errno)
 	}
@@ -75,13 +77,15 @@ func TestRootNode_Rmdir(t *testing.T) {
 	root, st := newTestRoot(t)
 	ctx := context.Background()
 
-	_ = st.Create("bb")
-	errno := root.Rmdir(ctx, "bb")
+	prefix := "bb"
+	path := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: prefix}
+	_ = st.Create(path)
+	errno := root.Rmdir(ctx, prefix)
 	if errno != 0 {
 		t.Fatalf("rmdir failed: %v", errno)
 	}
 
-	exists, _ := st.Exists("bb")
+	exists, _ := st.Exists(path)
 	if exists {
 		t.Errorf("prefix still exists in store")
 	}
@@ -90,8 +94,14 @@ func TestRootNode_Rmdir(t *testing.T) {
 func TestRootNode_Readdir(t *testing.T) {
 	root, st := newTestRoot(t)
 
-	_ = st.Create("01")
-	_ = st.Create("02")
+	prefixes := []meta.Path{
+		{Kind: meta.PathIsPrefixFolder, Prefix: "01"},
+		{Kind: meta.PathIsPrefixFolder, Prefix: "02"},
+	}
+
+	for _, prefix := range prefixes {
+		_ = st.Create(prefix)
+	}
 
 	names, err := readDirEntries(root)
 	if err != nil {
@@ -152,12 +162,20 @@ func TestRootNode_Statfs(t *testing.T) {
 	}
 
 	// Add files and check count
-	_ = st.Create("01")
-	err := st.Write("01/f1", []byte("hello"), 0644)
-	if err != nil {
-		t.Fatalf("write failed: %v", err)
+	prefix := "01"
+	path := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: prefix}
+	_ = st.Create(path)
+	files := map[meta.Path]string{
+		{Kind: meta.PathIsFile, Prefix: prefix, Key: "f1"}: "hello",
+		{Kind: meta.PathIsFile, Prefix: prefix, Key: "f2"}: "world",
 	}
-	_ = st.Write("01/f2", []byte("world"), 0644)
+
+	for file, content := range files {
+		err := st.Write(file, []byte(content), 0o644)
+		if err != nil {
+			t.Fatalf("write failed: %v", err)
+		}
+	}
 
 	_ = root.Statfs(ctx, &out)
 	if out.Files != 2 {
@@ -175,7 +193,7 @@ func TestRootNode_NilSafety(t *testing.T) {
 	if _, errno := root.Lookup(ctx, "01", &fuse.EntryOut{}); errno != syscall.EIO {
 		t.Errorf("Lookup: expected EIO, got %v", errno)
 	}
-	if _, errno := root.Mkdir(ctx, "01", 0755, &fuse.EntryOut{}); errno != syscall.EIO {
+	if _, errno := root.Mkdir(ctx, "01", 0o755, &fuse.EntryOut{}); errno != syscall.EIO {
 		t.Errorf("Mkdir: expected EIO, got %v", errno)
 	}
 	if errno := root.Rmdir(ctx, "01"); errno != syscall.EIO {

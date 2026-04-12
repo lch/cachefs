@@ -357,6 +357,25 @@ func (s *boltDBBlobStore) List(p meta.Path) ([]string, error) {
 			}
 			return nil
 		})
+	case meta.PathIsSubFolder:
+		s.db.View(func(tx *bbolt.Tx) error {
+			b := tx.Bucket([]byte(p.Prefix))
+			if b == nil {
+				return notFound("prefix", p.String())
+			}
+			err := b.ForEach(func(k, v []byte) error {
+				keyStr := string(k)
+				if strings.HasPrefix(keyStr, p.Key) {
+					list = append(list, keyStr)
+				}
+				return nil
+			})
+			if err != nil {
+				return err
+			}
+			return nil
+		})
+
 	default:
 	}
 	return list, nil

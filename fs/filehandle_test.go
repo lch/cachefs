@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/lch/cachefs/internal/meta"
 )
 
 func TestCacheFileHandle_ReadWrite(t *testing.T) {
@@ -13,11 +14,12 @@ func TestCacheFileHandle_ReadWrite(t *testing.T) {
 	ctx := context.Background()
 
 	path := "01/test.txt"
-	_ = st.Create(path)
+	p, _ := meta.NewPathFromString(path)
+	_ = st.Create(p)
 
 	h := &CacheFileHandle{
 		cfs:  root.cfs,
-		path: path,
+		path: p,
 	}
 
 	// Test Write
@@ -58,7 +60,7 @@ func TestCacheFileHandle_ReadWrite(t *testing.T) {
 	}
 
 	// Verify in store
-	stData, _, err := st.Read(path)
+	stData, _, err := st.Read(p)
 	if err != nil {
 		t.Fatalf("Store.Read failed: %v", err)
 	}
@@ -72,12 +74,13 @@ func TestCacheFileHandle_Getattr(t *testing.T) {
 	ctx := context.Background()
 
 	path := "0a/attr.txt"
-	_ = st.Create(path)
-	_ = st.Write(path, []byte("some data"), 0644)
+	p, _ := meta.NewPathFromString(path)
+	_ = st.Create(p)
+	_ = st.Write(p, []byte("some data"), 0o644)
 
 	h := &CacheFileHandle{
 		cfs:  root.cfs,
-		path: path,
+		path: p,
 	}
 
 	var out fuse.AttrOut
@@ -96,21 +99,22 @@ func TestCacheFileHandle_Atime(t *testing.T) {
 	ctx := context.Background()
 
 	path := "0b/atime.txt"
-	_ = st.Create(path)
-	_ = st.Write(path, []byte("data"), 0644)
+	p, _ := meta.NewPathFromString(path)
+	_ = st.Create(p)
+	_ = st.Write(p, []byte("data"), 0o644)
 
 	h := &CacheFileHandle{
 		cfs:  root.cfs,
-		path: path,
+		path: p,
 	}
 
-	attr1, _ := st.GetMeta(path)
-	
+	attr1, _ := st.GetMeta(p)
+
 	// Read should touch atime
 	dest := make([]byte, 4)
 	_, _ = h.Read(ctx, dest, 0)
 
-	attr2, _ := st.GetMeta(path)
+	attr2, _ := st.GetMeta(p)
 	if attr2.Atime <= attr1.Atime && attr2.Atime == 0 {
 		// Atime might not have changed if it's too fast, but it should be set (non-zero)
 	}

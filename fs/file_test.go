@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/lch/cachefs/internal/meta"
 )
-
 
 func TestFileNode_DirectoryOps(t *testing.T) {
 	root, st := newTestRoot(t)
@@ -14,7 +14,7 @@ func TestFileNode_DirectoryOps(t *testing.T) {
 
 	// 1. Create a prefix directory via RootNode
 	prefix := "01"
-	_, errno := root.Mkdir(ctx, prefix, 0755, &fuse.EntryOut{})
+	_, errno := root.Mkdir(ctx, prefix, 0o755, &fuse.EntryOut{})
 	if errno != 0 {
 		t.Fatalf("RootNode.Mkdir failed: %v", errno)
 	}
@@ -22,19 +22,20 @@ func TestFileNode_DirectoryOps(t *testing.T) {
 	// 2. Create prefixNode manually for testing
 	prefixNode := &FileNode{
 		cfs:  root.cfs,
-		path: prefix + "/",
+		path: meta.Path{Prefix: prefix, Key: "", Kind: meta.PathIsPrefixFolder},
 	}
 
 	// 3. Create a subdirectory via FileNode (Mkdir)
 	subDirName := "subdir"
 	var out fuse.EntryOut
-	_, errno = prefixNode.Mkdir(ctx, subDirName, 0755, &out)
+	_, errno = prefixNode.Mkdir(ctx, subDirName, 0o755, &out)
 	if errno != 0 {
 		t.Fatalf("FileNode.Mkdir failed: %v", errno)
 	}
 
 	// Verify in store
-	exists, _ := st.Exists(prefix + "/" + subDirName + "/")
+	p := meta.Path{Kind: meta.PathIsSubFolder, Prefix: prefix, Key: subDirName + "/"}
+	exists, _ := st.Exists(p)
 	if !exists {
 		t.Errorf("Subdirectory not found in store")
 	}
@@ -53,11 +54,12 @@ func TestFileNode_DirectoryOps(t *testing.T) {
 	}
 
 	// Verify rename in store
-	exists, _ = st.Exists(prefix + "/" + subDirName + "/")
+	exists, _ = st.Exists(p)
 	if exists {
 		t.Errorf("Old subdirectory still exists in store")
 	}
-	exists, _ = st.Exists(prefix + "/" + newName + "/")
+	newP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: prefix, Key: newName + "/"}
+	exists, _ = st.Exists(newP)
 	if !exists {
 		t.Errorf("New subdirectory not found in store")
 	}
@@ -67,7 +69,7 @@ func TestFileNode_DirectoryOps(t *testing.T) {
 	if errno != 0 {
 		t.Fatalf("FileNode.Rmdir failed: %v", errno)
 	}
-	exists, _ = st.Exists(prefix + "/" + newName + "/")
+	exists, _ = st.Exists(newP)
 	if exists {
 		t.Errorf("Subdirectory still exists after Rmdir")
 	}

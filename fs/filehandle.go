@@ -14,7 +14,7 @@ import (
 // CacheFileHandle is the per-open handle state for a cached file.
 type CacheFileHandle struct {
 	cfs  *CacheFS
-	path string
+	path meta.Path
 	attr *meta.FileAttr
 	mode uint32
 
@@ -87,8 +87,7 @@ func (h *CacheFileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscal
 	}
 	h.attr = attr
 
-	p, _ := meta.NewPathFromString(h.path)
-	ino := pathIno(*p)
+	ino := pathIno(h.path)
 
 	fillFileAttrOut(out, h.cfs, h.attr, ino)
 	return 0
