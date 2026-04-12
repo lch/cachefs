@@ -227,7 +227,6 @@ func (n *FileNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 	childP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: n.path.Prefix, Key: childKey}
 
 	err := n.cfs.Store.Create(childP)
-
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, syscall.EEXIST

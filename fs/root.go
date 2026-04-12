@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"syscall"
 	"time"
 
@@ -99,7 +100,7 @@ func (n *RootNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 	if n.cfs == nil || n.cfs.Store == nil {
 		return nil, syscall.EIO
 	}
-
+	name = strings.ToLower(name)
 	path := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: name, Key: ""}
 	err := n.cfs.Store.Create(path)
 	if err != nil {
