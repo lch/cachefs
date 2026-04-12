@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -356,7 +357,7 @@ func (n *FileNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		}
 
 		d := fuse.DirEntry{
-			Name: strings.TrimSuffix(entryName, "/"),
+			Name: filepath.Base(strings.TrimSuffix(entryName, "/")),
 			Ino:  pathIno(childP),
 		}
 

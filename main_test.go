@@ -14,6 +14,7 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"github.com/lch/cachefs/internal/meta"
 	"github.com/lch/cachefs/store"
 
 	cfs "github.com/lch/cachefs/fs"
@@ -275,10 +276,68 @@ func TestIntegrationFilesystem(t *testing.T) {
 			payload := []byte("hello world")
 			mustWriteFile(t, file, payload)
 
-			// Simple os.ReadFile wraps explicit Open/Read/Close.
 			// This covers the exact interaction that triggered the double mutex lock.
 			if got := mustReadFile(t, file); !reflect.DeepEqual(got, payload) {
 				t.Fatalf("ReadFile = %q, want %q", got, payload)
+			}
+		})
+	})
+
+	t.Run("deep-directory-trees", func(t *testing.T) {
+		withMountedFS(t, func(mount string) {
+			deepPath := filepath.Join(mount, "aa", "bb", "cc", "dd", "ee")
+			filePath := filepath.Join(deepPath, "file.txt")
+
+			if err := os.MkdirAll(deepPath, 0o755); err != nil {
+				t.Fatalf("MkdirAll failed: %v", err)
+			}
+			mustWriteFile(t, filePath, []byte("deep data"))
+
+			if got := mustReadFile(t, filePath); string(got) != "deep data" {
+				t.Fatalf("ReadFile after MkdirAll = %q", got)
+			}
+
+			// Test recursive deletion.
+			removePath := filepath.Join(mount, "aa")
+			if err := os.RemoveAll(removePath); err != nil {
+				t.Fatalf("RemoveAll failed: %v", err)
+			}
+			if _, err := os.Stat(removePath); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("RemoveAll did not delete cleanly, stat err = %v", err)
+			}
+		})
+	})
+
+	t.Run("fsync-data-integrity", func(t *testing.T) {
+		withMountedFSAndStore(t, func(mount, backendDir string, st store.Store) {
+			prefix := filepath.Join(mount, "aa")
+			mustMkdir(t, prefix)
+			file := filepath.Join(prefix, "sync.txt")
+
+			f, err := os.OpenFile(file, os.O_CREATE|os.O_RDWR, 0o644)
+			if err != nil {
+				t.Fatalf("OpenFile failed: %v", err)
+			}
+			defer f.Close()
+
+			payload := []byte("sync payload")
+			if _, err := f.Write(payload); err != nil {
+				t.Fatalf("Write failed: %v", err)
+			}
+
+			// Explicitly trigger syscall.Fsync instead of just letting Close() trigger flush.
+			if err := f.Sync(); err != nil {
+				t.Fatalf("Sync failed: %v", err)
+			}
+
+			// Verify backend Store actually saved the data *before* the file is closed!
+			p, _ := meta.NewPathFromString("aa/sync.txt")
+			backendData, _, err := st.Read(p)
+			if err != nil {
+				t.Fatalf("Store Read failed: %v", err)
+			}
+			if string(backendData) != string(payload) {
+				t.Fatalf("Backend data = %q, want %q", backendData, payload)
 			}
 		})
 	})
