@@ -219,11 +219,7 @@ func (n *FileNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 	if n.cfs == nil || n.cfs.Store == nil {
 		return nil, syscall.EIO
 	}
-	if !n.IsDir() {
-		return nil, syscall.EINVAL
-	}
-
-	childKey := fmt.Sprintf("%s/%s", n.path.Key, name)
+	childKey := fmt.Sprintf("%s/%s/", n.path.Key, name)
 	childP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: n.path.Prefix, Key: childKey}
 
 	err := n.cfs.Store.Create(childP)
