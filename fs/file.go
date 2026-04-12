@@ -3,7 +3,6 @@ package fs
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"syscall"
@@ -165,13 +164,9 @@ func (n *FileNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		return nil, syscall.EIO
 	}
 
-	if !n.IsDir() {
-		return nil, syscall.EINVAL
-	}
-
+	childKey := meta.ChildKey(n.path, name, false)
 	childP := n.path
-	newKey := fmt.Sprintf("%s/%s", childP.Key, name)
-	childP.Key = newKey
+	childP.Key = childKey
 
 	exists, err := n.cfs.Store.Exists(childP)
 	if err != nil {
@@ -185,6 +180,15 @@ func (n *FileNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	attr, err := n.cfs.Store.GetMeta(childP)
 	if err != nil {
 		return nil, fs.ToErrno(err)
+	}
+
+	if attr.IsDir() {
+		childP.Kind = meta.PathIsSubFolder
+		if !strings.HasSuffix(childP.Key, "/") {
+			childP.Key += "/"
+		}
+	} else {
+		childP.Kind = meta.PathIsFile
 	}
 
 	ino := pathIno(childP)
@@ -219,10 +223,11 @@ func (n *FileNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 	if n.cfs == nil || n.cfs.Store == nil {
 		return nil, syscall.EIO
 	}
-	childKey := meta.ChildKey(n.path, name)
+	childKey := meta.ChildKey(n.path, name, true)
 	childP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: n.path.Prefix, Key: childKey}
 
 	err := n.cfs.Store.Create(childP)
+
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, syscall.EEXIST
@@ -253,7 +258,7 @@ func (n *FileNode) Rmdir(ctx context.Context, name string) syscall.Errno {
 		return syscall.EIO
 	}
 
-	childKey := meta.ChildKey(n.path, name)
+	childKey := meta.ChildKey(n.path, name, true)
 	childP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: n.path.Prefix, Key: childKey}
 
 	err := n.cfs.Store.Delete(childP)
@@ -271,27 +276,34 @@ func (n *FileNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 		return syscall.EIO
 	}
 
-	oldChildKey := fmt.Sprintf("%s/%s/", n.path.Key, name)
-	oldChildP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: n.path.Prefix, Key: oldChildKey}
-	// Check if oldPath is dir
-	isDir := false
-	if exists, _ := n.cfs.Store.Exists(oldChildP); exists {
-		isDir = true
+	oldChildKey := meta.ChildKey(n.path, name, false)
+	oldChildP := n.path
+	oldChildP.Key = oldChildKey
+
+	attr, err := n.cfs.Store.GetMeta(oldChildP)
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+
+	if attr.IsDir() {
+		oldChildP.Kind = meta.PathIsSubFolder
+		if !strings.HasSuffix(oldChildP.Key, "/") {
+			oldChildP.Key += "/"
+		}
 	} else {
-		oldChildP.Key = strings.TrimSuffix(oldChildP.Key, "/")
 		oldChildP.Kind = meta.PathIsFile
 	}
 
-	_, ok := newParent.(*FileNode)
+	newParentNode, ok := newParent.(*FileNode)
 	if !ok {
 		return syscall.EXDEV
 	}
 
-	newChildKey := fmt.Sprintf("%s/%s", n.path.Key, newName)
-	if isDir {
-		newChildKey = newChildKey + "/"
-	}
-	newChildP := meta.Path{Kind: oldChildP.Kind, Prefix: n.path.Prefix, Key: newChildKey}
+	newChildKey := meta.ChildKey(newParentNode.path, newName, attr.IsDir())
+	newChildP := newParentNode.path
+	newChildP.Key = newChildKey
+	newChildP.Kind = oldChildP.Kind
+
 	if err := n.cfs.Store.Rename(oldChildP, newChildP); err != nil {
 		return fs.ToErrno(err)
 	}
@@ -310,6 +322,13 @@ func (n *FileNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 	r := make([]fuse.DirEntry, 0, len(list))
 	for _, entryName := range list {
 		childP := n.path
+		childP.Key = entryName
+		if strings.HasSuffix(entryName, "/") {
+			childP.Kind = meta.PathIsSubFolder
+		} else {
+			childP.Kind = meta.PathIsFile
+		}
+
 		d := fuse.DirEntry{
 			Name: strings.TrimSuffix(entryName, "/"),
 			Ino:  pathIno(childP),
@@ -319,7 +338,7 @@ func (n *FileNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		if err == nil {
 			d.Mode = attr.Mode
 		} else {
-			if strings.HasSuffix(entryName, "/") {
+			if childP.Kind == meta.PathIsSubFolder {
 				d.Mode = fuse.S_IFDIR | meta.DefaultDirMode
 			} else {
 				d.Mode = fuse.S_IFREG | meta.DefaultFileMode
@@ -327,6 +346,7 @@ func (n *FileNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
 		}
 		r = append(r, d)
 	}
+
 	return fs.NewListDirStream(r), 0
 }
 
@@ -349,7 +369,7 @@ func (n *FileNode) Create(ctx context.Context, name string, flags uint32, mode u
 		return nil, nil, 0, syscall.EIO
 	}
 
-	childKey := meta.ChildKey(n.path, name)
+	childKey := meta.ChildKey(n.path, name, false)
 	childP := meta.Path{Kind: meta.PathIsFile, Prefix: n.path.Prefix, Key: childKey}
 
 	err := n.cfs.Store.Create(childP)
@@ -393,7 +413,7 @@ func (n *FileNode) Unlink(ctx context.Context, name string) syscall.Errno {
 		return syscall.EIO
 	}
 
-	childKey := meta.ChildKey(n.path, name)
+	childKey := meta.ChildKey(n.path, name, false)
 	childP := meta.Path{Kind: meta.PathIsFile, Prefix: n.path.Prefix, Key: childKey}
 
 	err := n.cfs.Store.Delete(childP)

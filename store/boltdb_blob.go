@@ -205,8 +205,7 @@ func (s *boltDBBlobStore) GetMeta(p meta.Path) (attr *meta.FileAttr, err error) 
 	}
 
 	err = s.db.View(func(tx *bbolt.Tx) error {
-		switch p.Kind {
-		case meta.PathIsPrefixFolder:
+		if p.Kind == meta.PathIsPrefixFolder && p.Key == "" {
 			b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
 			if b == nil {
 				return notFound("blob metadata bucket", p.String())
@@ -218,38 +217,39 @@ func (s *boltDBBlobStore) GetMeta(p meta.Path) (attr *meta.FileAttr, err error) 
 				Mode: uint32(syscall.S_IFDIR) | 0o755,
 			}
 			return nil
-		case meta.PathIsSubFolder:
-			b := tx.Bucket([]byte(p.Prefix))
-			if b == nil {
-				return notFound("prefix bucket", p.String())
-			}
-			data := b.Get([]byte(p.Key))
-			if data == nil {
-				return notFound("key", p.String())
-			}
-			attr = &meta.FileAttr{
-				Mode: uint32(syscall.S_IFDIR) | 0o755,
-			}
-			return attr.UnmarshalBinary(data)
-		case meta.PathIsFile:
-			b := tx.Bucket([]byte(p.Prefix))
-			if b == nil {
-				return notFound("prefix bucket", p.String())
-			}
-			data := b.Get([]byte(p.Key))
-			if data == nil {
-				return notFound("key", p.String())
-			}
-			attr = &meta.FileAttr{}
-			return attr.UnmarshalBinary(data)
 		}
-		return nil
+
+		// For children (files or subfolders)
+		b := tx.Bucket([]byte(p.Prefix))
+		if b == nil {
+			return notFound("prefix bucket", p.String())
+		}
+
+		// Try the key as provided
+		data := b.Get([]byte(p.Key))
+		if data == nil {
+			// If not found and doesn't have slash, try with slash
+			if !strings.HasSuffix(p.Key, "/") {
+				data = b.Get([]byte(p.Key + "/"))
+			} else {
+				// If has slash, try without slash
+				data = b.Get([]byte(strings.TrimSuffix(p.Key, "/")))
+			}
+		}
+
+		if data == nil {
+			return notFound("entry", p.String())
+		}
+
+		attr = &meta.FileAttr{}
+		return attr.UnmarshalBinary(data)
 	})
 	if err != nil {
 		return nil, err
 	}
 	return attr, nil
 }
+
 
 func (s *boltDBBlobStore) UpdateMeta(p meta.Path, attr *meta.FileAttr) error {
 	if p.Kind == meta.PathIsRootFolder || p.Kind == meta.PathIsPrefixFolder {
