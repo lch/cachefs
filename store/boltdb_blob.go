@@ -250,7 +250,6 @@ func (s *boltDBBlobStore) GetMeta(p meta.Path) (attr *meta.FileAttr, err error) 
 	return attr, nil
 }
 
-
 func (s *boltDBBlobStore) UpdateMeta(p meta.Path, attr *meta.FileAttr) error {
 	if p.Kind == meta.PathIsRootFolder || p.Kind == meta.PathIsPrefixFolder {
 		return nil
@@ -430,55 +429,159 @@ func (s *boltDBBlobStore) Exists(p meta.Path) (bool, error) {
 }
 
 func (s *boltDBBlobStore) Rename(oldPath, newPath meta.Path) error {
+	if oldPath.Prefix != newPath.Prefix {
+		return s.renameAcrossPrefixes(oldPath, newPath)
+	}
+	return s.renameInPrefixes(oldPath, newPath)
+}
+
+func (s *boltDBBlobStore) renameInPrefixes(oldPath, newPath meta.Path) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
-		oldB := tx.Bucket([]byte(oldPath.Prefix))
-		if oldB == nil {
+		b := tx.Bucket([]byte(oldPath.Prefix))
+		if b == nil {
 			return notFound("prefix bucket", oldPath.String())
 		}
 
-		// Check if it's a directory (trailing slash in key or isDir attr)
+		// Detect if it's a directory
 		isDir := strings.HasSuffix(oldPath.Key, "/")
-		if !isDir {
-			data := oldB.Get([]byte(oldPath.Key))
-			if data != nil {
-				attr := new(meta.FileAttr)
-				if err := attr.UnmarshalBinary(data); err == nil && attr.IsDir() {
-					isDir = true
-				}
+		data := b.Get([]byte(oldPath.Key))
+		if data != nil {
+			attr := new(meta.FileAttr)
+			if err := attr.UnmarshalBinary(data); err == nil && attr.IsDir() {
+				isDir = true
 			}
 		}
 
-		newB, err := tx.CreateBucketIfNotExists([]byte(newPath.Prefix))
-		if err != nil {
-			return err
-		}
-
 		if !isDir {
-			data := oldB.Get([]byte(oldPath.Key))
 			if data == nil {
 				return notFound("key", oldPath.String())
 			}
-			if err := newB.Put([]byte(newPath.Key), data); err != nil {
+
+			// In-prefix file move: Put new, delete old
+			if err := b.Put([]byte(newPath.Key), data); err != nil {
 				return err
 			}
-			return oldB.Delete([]byte(oldPath.Key))
+			return b.Delete([]byte(oldPath.Key))
 		}
 
-		// Handle directory rename: move all keys starting with oldPath.Key
-		cursor := oldB.Cursor()
-		prefix := []byte(oldPath.Key)
-		for k, v := cursor.Seek(prefix); k != nil && bytes.HasPrefix(k, prefix); k, v = cursor.Next() {
-			newKey := append([]byte(newPath.Key), k[len(prefix):]...)
-			if err := newB.Put(newKey, v); err != nil {
+		// Directory move: recursive key migration
+		cursor := b.Cursor()
+		oldKey := oldPath.Key
+		if !strings.HasSuffix(oldKey, "/") {
+			oldKey += "/"
+		}
+		oldKeyBytes := []byte(oldKey)
+
+		// Move the directory entry itself
+		dirKey := []byte(strings.TrimSuffix(oldPath.Key, "/"))
+		if v := b.Get(dirKey); v != nil {
+			newDirKey := []byte(strings.TrimSuffix(newPath.Key, "/"))
+			if err := b.Put(newDirKey, v); err != nil {
 				return err
 			}
-			if err := oldB.Delete(k); err != nil {
+			_ = b.Delete(dirKey)
+		}
+
+		// Move all children. Collect first to avoid cursor instability during modifications.
+		type entry struct {
+			k, v []byte
+		}
+		var children []entry
+		for k, v := cursor.Seek(oldKeyBytes); k != nil && bytes.HasPrefix(k, oldKeyBytes); k, v = cursor.Next() {
+			kCopy := make([]byte, len(k))
+			copy(kCopy, k)
+			vCopy := make([]byte, len(v))
+			copy(vCopy, v)
+			children = append(children, entry{k: kCopy, v: vCopy})
+		}
+
+		newKeyPrefix := newPath.Key
+		if !strings.HasSuffix(newKeyPrefix, "/") {
+			newKeyPrefix += "/"
+		}
+
+		for _, e := range children {
+			newKey := append([]byte(newKeyPrefix), e.k[len(oldKeyBytes):]...)
+			if err := b.Put(newKey, e.v); err != nil {
+				return err
+			}
+			if err := b.Delete(e.k); err != nil {
 				return err
 			}
 		}
 
 		return nil
 	})
+}
+
+func (s *boltDBBlobStore) renameAcrossPrefixes(oldPath, newPath meta.Path) error {
+	attr, err := s.GetMeta(oldPath)
+	if err != nil {
+		return err
+	}
+
+	if attr.IsDir() {
+		return s.renameDirAcrossPrefixes(oldPath, newPath)
+	}
+
+	// Rename file across prefixes: Read, Write, Delete
+	data, _, err := s.Read(oldPath)
+	if err != nil {
+		return err
+	}
+
+	if err := s.Write(newPath, data, attr.Mode); err != nil {
+		return err
+	}
+
+	// Preserve metadata if possible (times etc)
+	_ = s.UpdateMeta(newPath, attr)
+
+	return s.Delete(oldPath)
+}
+
+func (s *boltDBBlobStore) renameDirAcrossPrefixes(oldPath, newPath meta.Path) error {
+	// 1. Create target directory
+	if err := s.Create(newPath); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+
+	// 2. List all immediate children
+	children, err := s.List(oldPath)
+	if err != nil {
+		return err
+	}
+
+	// 3. Move each child
+	for _, childKey := range children {
+		// childKey is already the full key in the old prefix bucket
+		// We need to extract the relative part
+		oldKeyPrefix := oldPath.Key
+		if !strings.HasSuffix(oldKeyPrefix, "/") {
+			oldKeyPrefix += "/"
+		}
+
+		relPath := strings.TrimPrefix(childKey, oldKeyPrefix)
+		name := strings.TrimSuffix(relPath, "/")
+
+		childOldPath := oldPath
+		childOldPath.Key = childKey
+		if strings.HasSuffix(childKey, "/") {
+			childOldPath.Kind = meta.PathIsSubFolder
+		} else {
+			childOldPath.Kind = meta.PathIsFile
+		}
+
+		childNewPath := newPath
+		childNewPath.Key = meta.ChildKey(newPath, name, childOldPath.Kind == meta.PathIsSubFolder)
+
+		if err := s.Rename(childOldPath, childNewPath); err != nil {
+			return err
+		}
+	}
+
+	// 4. Delete old directory
+	return s.Delete(oldPath)
 }
 
 func newBoltBlobStore(db *bbolt.DB) (*boltDBBlobStore, error) {

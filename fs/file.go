@@ -306,7 +306,27 @@ func (n *FileNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 	if err := n.cfs.Store.Rename(oldChildP, newChildP); err != nil {
 		return fs.ToErrno(err)
 	}
+
+	if childInode := n.GetChild(name); childInode != nil {
+		if childOps, ok := childInode.Operations().(*FileNode); ok {
+			childOps.updatePathRecursive(newChildP)
+		}
+	}
+
 	return 0
+}
+
+func (n *FileNode) updatePathRecursive(newPath meta.Path) {
+	n.path = newPath
+	for name, child := range n.Inode.Children() {
+		if childOps, ok := child.Operations().(*FileNode); ok {
+			isDir := childOps.path.Kind == meta.PathIsSubFolder
+			childKey := meta.ChildKey(newPath, name, isDir)
+			childPath := newPath
+			childPath.Key = childKey
+			childOps.updatePathRecursive(childPath)
+		}
+	}
 }
 
 func (n *FileNode) Readdir(ctx context.Context) (fs.DirStream, syscall.Errno) {
