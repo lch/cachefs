@@ -284,7 +284,15 @@ func (s *boltDBBlobStore) UpdateMeta(p meta.Path, attr *meta.FileAttr) error {
 		if err != nil {
 			return err
 		}
-		return b.Put([]byte(p.Key), data)
+		err = b.Put([]byte(p.Key), data)
+		if err != nil {
+			return err
+		}
+		err = tx.Commit()
+		if err != nil {
+			return err
+		}
+		return nil
 	})
 }
 
