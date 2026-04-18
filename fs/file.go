@@ -117,7 +117,7 @@ func (n *FileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAt
 	updated := *attr
 	changed := false
 	if mode, ok := in.GetMode(); ok {
-		updated.Mode = mode & 0o777
+		updated.Mode = (updated.Mode &^ 0o7777) | (mode & 0o7777)
 		changed = true
 	}
 	if uid, ok := in.GetUID(); ok {
