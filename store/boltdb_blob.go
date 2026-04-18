@@ -20,7 +20,7 @@ const (
 	defaultMetadataDB = "metadata.db"
 )
 
-type boltDBBlobStore struct {
+type BoltDBBlobStore struct {
 	db    *bbolt.DB
 	blobs *blob.BlobManager
 	dir   string
@@ -49,7 +49,7 @@ func NewStore(dir string) (Store, error) {
 	return s, nil
 }
 
-func (s *boltDBBlobStore) Read(p meta.Path) (data []byte, attr *meta.FileAttr, err error) {
+func (s *BoltDBBlobStore) Read(p meta.Path) (data []byte, attr *meta.FileAttr, err error) {
 	attr, err = s.GetMeta(p)
 	if err != nil {
 		return
@@ -68,7 +68,7 @@ func (s *boltDBBlobStore) Read(p meta.Path) (data []byte, attr *meta.FileAttr, e
 	return
 }
 
-func (s *boltDBBlobStore) Write(p meta.Path, data []byte, mode uint32) error {
+func (s *BoltDBBlobStore) Write(p meta.Path, data []byte, mode uint32) error {
 	if p.Kind == meta.PathIsRootFolder || p.Kind == meta.PathIsPrefixFolder {
 		return errors.New("store: cannot write to folder")
 	}
@@ -128,7 +128,7 @@ func (s *boltDBBlobStore) Write(p meta.Path, data []byte, mode uint32) error {
 	return s.UpdateMeta(p, attr)
 }
 
-func (s *boltDBBlobStore) Delete(p meta.Path) error {
+func (s *BoltDBBlobStore) Delete(p meta.Path) error {
 	switch p.Kind {
 	case meta.PathIsRootFolder:
 
@@ -204,7 +204,7 @@ func (s *boltDBBlobStore) Delete(p meta.Path) error {
 	return nil
 }
 
-func (s *boltDBBlobStore) GetMeta(p meta.Path) (attr *meta.FileAttr, err error) {
+func (s *BoltDBBlobStore) GetMeta(p meta.Path) (attr *meta.FileAttr, err error) {
 	if p.Kind == meta.PathIsRootFolder {
 		return &meta.FileAttr{
 			Mode: uint32(syscall.S_IFDIR) | 0o755,
@@ -257,7 +257,7 @@ func (s *boltDBBlobStore) GetMeta(p meta.Path) (attr *meta.FileAttr, err error) 
 	return attr, nil
 }
 
-func (s *boltDBBlobStore) UpdateMeta(p meta.Path, attr *meta.FileAttr) error {
+func (s *BoltDBBlobStore) UpdateMeta(p meta.Path, attr *meta.FileAttr) error {
 	if p.Kind == meta.PathIsRootFolder || p.Kind == meta.PathIsPrefixFolder {
 		return nil
 	}
@@ -292,7 +292,7 @@ func (s *boltDBBlobStore) UpdateMeta(p meta.Path, attr *meta.FileAttr) error {
 	})
 }
 
-func (s *boltDBBlobStore) Truncate(p meta.Path, newSize uint64) error {
+func (s *BoltDBBlobStore) Truncate(p meta.Path, newSize uint64) error {
 	attr, err := s.GetMeta(p)
 	if err != nil {
 		return err
@@ -328,7 +328,7 @@ func (s *boltDBBlobStore) Truncate(p meta.Path, newSize uint64) error {
 	return s.UpdateMeta(p, attr)
 }
 
-func (s *boltDBBlobStore) List(p meta.Path) ([]string, error) {
+func (s *BoltDBBlobStore) List(p meta.Path) ([]string, error) {
 	list := make([]string, 0)
 	switch p.Kind {
 	case meta.PathIsRootFolder:
@@ -400,7 +400,7 @@ func (s *boltDBBlobStore) List(p meta.Path) ([]string, error) {
 	return list, nil
 }
 
-func (s *boltDBBlobStore) Create(p meta.Path) error {
+func (s *BoltDBBlobStore) Create(p meta.Path) error {
 	if p.Kind == meta.PathIsPrefixFolder {
 		return s.db.Update(func(tx *bbolt.Tx) error {
 			_, err := tx.CreateBucketIfNotExists([]byte(p.Prefix))
@@ -437,7 +437,7 @@ func (s *boltDBBlobStore) Create(p meta.Path) error {
 	return s.UpdateMeta(p, attr)
 }
 
-func (s *boltDBBlobStore) Exists(p meta.Path) (bool, error) {
+func (s *BoltDBBlobStore) Exists(p meta.Path) (bool, error) {
 	attr, err := s.GetMeta(p)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || strings.Contains(err.Error(), "not found") {
@@ -448,14 +448,14 @@ func (s *boltDBBlobStore) Exists(p meta.Path) (bool, error) {
 	return attr != nil, nil
 }
 
-func (s *boltDBBlobStore) Rename(oldPath, newPath meta.Path) error {
+func (s *BoltDBBlobStore) Rename(oldPath, newPath meta.Path) error {
 	if oldPath.Prefix != newPath.Prefix {
 		return s.renameAcrossPrefixes(oldPath, newPath)
 	}
 	return s.renameInPrefixes(oldPath, newPath)
 }
 
-func (s *boltDBBlobStore) renameInPrefixes(oldPath, newPath meta.Path) error {
+func (s *BoltDBBlobStore) renameInPrefixes(oldPath, newPath meta.Path) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(oldPath.Prefix))
 		if b == nil {
@@ -534,7 +534,7 @@ func (s *boltDBBlobStore) renameInPrefixes(oldPath, newPath meta.Path) error {
 	})
 }
 
-func (s *boltDBBlobStore) renameAcrossPrefixes(oldPath, newPath meta.Path) error {
+func (s *BoltDBBlobStore) renameAcrossPrefixes(oldPath, newPath meta.Path) error {
 	attr, err := s.GetMeta(oldPath)
 	if err != nil {
 		return err
@@ -560,7 +560,7 @@ func (s *boltDBBlobStore) renameAcrossPrefixes(oldPath, newPath meta.Path) error
 	return s.Delete(oldPath)
 }
 
-func (s *boltDBBlobStore) renameDirAcrossPrefixes(oldPath, newPath meta.Path) error {
+func (s *BoltDBBlobStore) renameDirAcrossPrefixes(oldPath, newPath meta.Path) error {
 	// 1. Create target directory
 	if err := s.Create(newPath); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
@@ -604,7 +604,7 @@ func (s *boltDBBlobStore) renameDirAcrossPrefixes(oldPath, newPath meta.Path) er
 	return s.Delete(oldPath)
 }
 
-func newBoltBlobStore(db *bbolt.DB) (*boltDBBlobStore, error) {
+func newBoltBlobStore(db *bbolt.DB) (*BoltDBBlobStore, error) {
 	if db == nil {
 		return nil, errors.New("store: nil db")
 	}
@@ -616,14 +616,14 @@ func newBoltBlobStore(db *bbolt.DB) (*boltDBBlobStore, error) {
 
 	bm := blob.NewBlobManager(dir, db)
 
-	return &boltDBBlobStore{
+	return &BoltDBBlobStore{
 		db:    db,
 		blobs: bm,
 		dir:   dir,
 	}, nil
 }
 
-func (s *boltDBBlobStore) Close() error {
+func (s *BoltDBBlobStore) Close() error {
 	if s == nil {
 		return nil
 	}
@@ -646,7 +646,7 @@ func notFound(kind, path string) error {
 	return fmt.Errorf("store: %s %q: %w", kind, path, os.ErrNotExist)
 }
 
-func (s *boltDBBlobStore) allocateBlocks(prefix string, needed int) ([]uint64, error) {
+func (s *BoltDBBlobStore) allocateBlocks(prefix string, needed int) ([]uint64, error) {
 	s.flMu.Lock()
 	defer s.flMu.Unlock()
 
@@ -672,7 +672,7 @@ func (s *boltDBBlobStore) allocateBlocks(prefix string, needed int) ([]uint64, e
 	return blocks, err
 }
 
-func (s *boltDBBlobStore) releaseBlocks(prefix string, blocks []uint64) error {
+func (s *BoltDBBlobStore) releaseBlocks(prefix string, blocks []uint64) error {
 	if len(blocks) == 0 {
 		return nil
 	}
@@ -684,4 +684,25 @@ func (s *boltDBBlobStore) releaseBlocks(prefix string, blocks []uint64) error {
 
 	bm.RecycledBlocks = append(bm.RecycledBlocks, blocks...)
 	return bm.Save(prefix, s.db)
+}
+
+func (s *BoltDBBlobStore) PrefixMeta() (m map[string]blob.BlobFileMeta) {
+	m = make(map[string]blob.BlobFileMeta)
+	if s != nil && s.blobs != nil {
+		s.db.View(func(tx *bbolt.Tx) error {
+			b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
+			if b == nil {
+				return ErrStoreCorrupt
+			}
+			b.ForEach(func(k, v []byte) error {
+				var meta blob.BlobFileMeta
+				meta.UnmarshalBinary(v)
+				prefix := string(k)
+				m[prefix] = meta
+				return nil
+			})
+			return nil
+		})
+	}
+	return
 }
