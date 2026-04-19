@@ -158,26 +158,14 @@ func (n *RootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Attr
 }
 
 func (n *RootNode) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {
-	prefixes, err := n.cfs.Store.List(meta.Path{Kind: meta.PathIsRootFolder})
-	if err != nil {
-		return fs.ToErrno(err)
-	}
-	var fileCount uint64
-	for _, prefix := range prefixes {
-		files, err := n.cfs.Store.List(
-			meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: prefix},
-		)
-		if err != nil {
-			return fs.ToErrno(err)
-		}
-		fileCount += uint64(len(files))
-	}
+	stats := n.cfs.Store.Stats()
+
 	out.Bsize = meta.DefaultBlockSize
 	out.Frsize = meta.DefaultBlockSize
-	out.Blocks = 1 // 100M blocks
-	out.Bfree = 1  // 80M free
-	out.Bavail = 1 // 80M available
-	out.Files = fileCount
+	out.Blocks = stats.AllocatedBlocks
+	out.Bfree = stats.FreeBlocks
+	out.Bavail = stats.FreeBlocks
+	out.Files = stats.Items
 	out.Ffree = 1 // 9M free files
 	out.NameLen = 255
 	return 0

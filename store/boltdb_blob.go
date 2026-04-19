@@ -712,7 +712,7 @@ type BoltDBBlobStoreStat struct {
 	blob.BlobFileMeta
 }
 
-func (s *BoltDBBlobStore) PrefixMeta() (m map[string]BoltDBBlobStoreStat) {
+func (s *BoltDBBlobStore) GetStoreStat() (m map[string]BoltDBBlobStoreStat) {
 	bfm := make(map[string]blob.BlobFileMeta)
 	if s != nil && s.blobs != nil {
 		s.db.View(func(tx *bbolt.Tx) error {
@@ -746,6 +746,15 @@ func (s *BoltDBBlobStore) PrefixMeta() (m map[string]BoltDBBlobStoreStat) {
 			ItemN:        itemN,
 			BlobFileMeta: meta,
 		}
+	}
+	return
+}
+
+func (s *BoltDBBlobStore) Stats() (stats StoreStats) {
+	for _, stat := range s.GetStoreStat() {
+		stats.Items += uint64(stat.ItemN)
+		stats.AllocatedBlocks += stat.AllocatedBlocks
+		stats.FreeBlocks += uint64(len(stat.RecycledBlocks))
 	}
 	return
 }

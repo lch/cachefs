@@ -12,6 +12,12 @@ var (
 	ErrStoreCorrupt   = errors.New("store: metadata db corrupt")
 )
 
+type StoreStats struct {
+	Items           uint64
+	AllocatedBlocks uint64
+	FreeBlocks      uint64
+}
+
 // Store is the storage interface used by the filesystem layer.
 type Store interface {
 	Read(path meta.Path) (data []byte, attr *meta.FileAttr, err error)
@@ -24,5 +30,6 @@ type Store interface {
 	Create(path meta.Path) error
 	Exists(path meta.Path) (bool, error)
 	Rename(oldPath, newPath meta.Path) error
+	Stats() StoreStats
 	Close() error
 }
