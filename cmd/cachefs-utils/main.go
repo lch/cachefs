@@ -43,10 +43,10 @@ func runInspect(fl *flag.FlagSet) {
 			t := table.NewWriter()
 			t.SetStyle(table.StyleColoredBright)
 			t.SetTitle("Blob Storage Metadata")
-			t.AppendHeader(table.Row{"Prefix", "ItemN", "Allocated", "Recycled"})
-			m := s.PrefixMeta()
-			for prefix, info := range m {
-				t.AppendRow([]any{prefix, info.ItemN, info.AllocatedBlocks, len(info.RecycledBlocks)})
+			t.AppendHeader(table.Row{"Prefix", "Files", "Allocated", "Recycled"})
+			m := s.GetStoreStat()
+			for _, info := range m {
+				t.AppendRow([]any{info.Prefix, info.ItemN, info.AllocatedBlocks, len(info.RecycledBlocks)})
 			}
 			fmt.Println(t.Render())
 		}
