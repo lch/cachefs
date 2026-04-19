@@ -131,77 +131,88 @@ func (s *BoltDBBlobStore) Write(p meta.Path, data []byte, mode uint32) error {
 func (s *BoltDBBlobStore) Delete(p meta.Path) error {
 	switch p.Kind {
 	case meta.PathIsRootFolder:
-
+		return nil
 	case meta.PathIsPrefixFolder:
-		err := s.db.View(func(tx *bbolt.Tx) error {
-			b := tx.Bucket([]byte(p.Prefix))
-			if b == nil {
-				return nil
-			}
-			bs := b.Inspect()
-			if bs.KeyN != 0 {
-				return ErrFolderNotEmpty
-			}
-			return nil
-		})
-		if err != nil {
-			return errors.Join(ErrStoreCorrupt, err)
-		}
-		err = s.db.Update(func(tx *bbolt.Tx) error {
-			_ = tx.DeleteBucket([]byte(p.Prefix))
-			b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
-			if b != nil {
-				_ = b.Delete([]byte(p.Prefix))
-			}
-			return s.blobs.RemoveBlob(p.Prefix)
-		})
-		return err
+		return s.deletePrefixFolder(p)
 	case meta.PathIsSubFolder:
-		fileCount := 0
-		err := s.db.View(func(tx *bbolt.Tx) error {
-			b := tx.Bucket([]byte(p.Prefix))
-			if b == nil {
-				return nil
-			}
-			b.ForEach(func(k, v []byte) error {
-				if strings.HasPrefix(string(k), p.Key) {
-					fileCount++
-				}
-				return nil
-			})
+		return s.deleteSubFolder(p)
+	case meta.PathIsFile:
+		return s.deleteFile(p)
+	default:
+		return nil
+	}
+}
+
+func (s *BoltDBBlobStore) deletePrefixFolder(p meta.Path) error {
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(p.Prefix))
+		if b == nil {
 			return nil
-		})
-		if err != nil {
-			return err
 		}
-		if fileCount > 1 {
+		bs := b.Inspect()
+		if bs.KeyN != 0 {
 			return ErrFolderNotEmpty
 		}
-		err = s.db.Update(func(tx *bbolt.Tx) error {
-			b := tx.Bucket([]byte(p.Prefix))
-			if b != nil {
-				return b.Delete([]byte(p.Key))
-			}
-			return nil
-		})
-		return err
-	case meta.PathIsFile:
-		attr, err := s.GetMeta(p)
-		if err != nil {
-			return err
-		}
-		if err := s.releaseBlocks(p.Prefix, attr.BlockIndices); err != nil {
-			return err
-		}
-		return s.db.Update(func(tx *bbolt.Tx) error {
-			b := tx.Bucket([]byte(p.Prefix))
-			if b != nil {
-				return b.Delete([]byte(p.Key))
-			}
-			return nil
-		})
+		return nil
+	})
+	if err != nil {
+		return errors.Join(ErrStoreCorrupt, err)
 	}
-	return nil
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		_ = tx.DeleteBucket([]byte(p.Prefix))
+		b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
+		if b != nil {
+			_ = b.Delete([]byte(p.Prefix))
+		}
+		return s.blobs.RemoveBlob(p.Prefix)
+	})
+}
+
+func (s *BoltDBBlobStore) deleteSubFolder(p meta.Path) error {
+	fileCount := 0
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(p.Prefix))
+		if b == nil {
+			return nil
+		}
+		_ = b.ForEach(func(k, v []byte) error {
+			if strings.HasPrefix(string(k), p.Key) {
+				fileCount++
+			}
+			return nil
+		})
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if fileCount > 1 {
+		return ErrFolderNotEmpty
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(p.Prefix))
+		if b != nil {
+			return b.Delete([]byte(p.Key))
+		}
+		return nil
+	})
+}
+
+func (s *BoltDBBlobStore) deleteFile(p meta.Path) error {
+	attr, err := s.GetMeta(p)
+	if err != nil {
+		return err
+	}
+	if err := s.releaseBlocks(p.Prefix, attr.BlockIndices); err != nil {
+		return err
+	}
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(p.Prefix))
+		if b != nil {
+			return b.Delete([]byte(p.Key))
+		}
+		return nil
+	})
 }
 
 func (s *BoltDBBlobStore) GetMeta(p meta.Path) (attr *meta.FileAttr, err error) {
@@ -329,75 +340,79 @@ func (s *BoltDBBlobStore) Truncate(p meta.Path, newSize uint64) error {
 }
 
 func (s *BoltDBBlobStore) List(p meta.Path) ([]string, error) {
-	list := make([]string, 0)
 	switch p.Kind {
 	case meta.PathIsRootFolder:
-		s.db.View(func(tx *bbolt.Tx) error {
-			b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
-			if b == nil {
-				return notFound("blob metadata bucket", p.String())
-			}
-			err := b.ForEach(func(k, v []byte) error {
-				list = append(list, string(k))
-				return nil
-			})
-			if err != nil {
-				return err
+		return s.listRootFolder(p)
+	case meta.PathIsPrefixFolder:
+		return s.listPrefixFolder(p)
+	case meta.PathIsSubFolder:
+		return s.listSubFolder(p)
+	default:
+		return []string{}, nil
+	}
+}
+
+func (s *BoltDBBlobStore) listRootFolder(p meta.Path) ([]string, error) {
+	var list []string
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
+		if b == nil {
+			return notFound("blob metadata bucket", p.String())
+		}
+		return b.ForEach(func(k, v []byte) error {
+			list = append(list, string(k))
+			return nil
+		})
+	})
+	return list, err
+}
+
+func (s *BoltDBBlobStore) listPrefixFolder(p meta.Path) ([]string, error) {
+	var list []string
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(p.Prefix))
+		if b == nil {
+			return notFound("prefix", p.String())
+		}
+		return b.ForEach(func(k, v []byte) error {
+			keyStr := string(k)
+			count := strings.Count(keyStr, "/")
+			switch count {
+			case 0:
+				list = append(list, keyStr)
+			case 1:
+				if strings.HasSuffix(keyStr, "/") {
+					list = append(list, keyStr)
+				}
 			}
 			return nil
 		})
-	case meta.PathIsPrefixFolder:
-		s.db.View(func(tx *bbolt.Tx) error {
-			b := tx.Bucket([]byte(p.Prefix))
-			if b == nil {
-				return notFound("prefix", p.String())
-			}
-			err := b.ForEach(func(k, v []byte) error {
-				keyStr := string(k)
-				count := strings.Count(keyStr, "/")
-				switch count {
-				case 0:
-					list = append(list, keyStr)
-				case 1:
-					if strings.HasSuffix(keyStr, "/") {
+	})
+	return list, err
+}
+
+func (s *BoltDBBlobStore) listSubFolder(p meta.Path) ([]string, error) {
+	var list []string
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(p.Prefix))
+		if b == nil {
+			return notFound("prefix", p.String())
+		}
+		return b.ForEach(func(k, v []byte) error {
+			keyStr := string(k)
+			if strings.HasPrefix(keyStr, p.Key) {
+				remainder := keyStr[len(p.Key):]
+				if len(remainder) > 0 {
+					count := strings.Count(remainder, "/")
+					if count == 0 || (count == 1 && strings.HasSuffix(remainder, "/")) {
 						list = append(list, keyStr)
 					}
 				}
-				return nil
-			})
-			if err != nil {
-				return err
 			}
 			return nil
 		})
-	case meta.PathIsSubFolder:
-		err := s.db.View(func(tx *bbolt.Tx) error {
-			b := tx.Bucket([]byte(p.Prefix))
-			if b == nil {
-				return notFound("prefix", p.String())
-			}
-			err := b.ForEach(func(k, v []byte) error {
-				keyStr := string(k)
-				if strings.HasPrefix(keyStr, p.Key) {
-					remainder := keyStr[len(p.Key):]
-					if len(remainder) > 0 {
-						count := strings.Count(remainder, "/")
-						if count == 0 || (count == 1 && strings.HasSuffix(remainder, "/")) {
-							list = append(list, keyStr)
-						}
-					}
-				}
-				return nil
-			})
-			return err
-		})
-		if err != nil {
-			return nil, err
-		}
-
-	default:
-	}
-	return list, nil
+	})
+	return list, err
 }
 
 func (s *BoltDBBlobStore) Create(p meta.Path) error {
@@ -614,6 +629,11 @@ func newBoltBlobStore(db *bbolt.DB) (*BoltDBBlobStore, error) {
 		return nil, fmt.Errorf("store: unable to determine blob directory from %q", db.Path())
 	}
 
+	db.Update(func(tx *bbolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte(blob.BlobMetadataBucketName))
+		return err
+	})
+
 	bm := blob.NewBlobManager(dir, db)
 
 	return &BoltDBBlobStore{
@@ -686,8 +706,14 @@ func (s *BoltDBBlobStore) releaseBlocks(prefix string, blocks []uint64) error {
 	return bm.Save(prefix, s.db)
 }
 
-func (s *BoltDBBlobStore) PrefixMeta() (m map[string]blob.BlobFileMeta) {
-	m = make(map[string]blob.BlobFileMeta)
+type BoltDBBlobStoreStat struct {
+	Prefix string
+	ItemN  int
+	blob.BlobFileMeta
+}
+
+func (s *BoltDBBlobStore) PrefixMeta() (m map[string]BoltDBBlobStoreStat) {
+	bfm := make(map[string]blob.BlobFileMeta)
 	if s != nil && s.blobs != nil {
 		s.db.View(func(tx *bbolt.Tx) error {
 			b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
@@ -698,11 +724,28 @@ func (s *BoltDBBlobStore) PrefixMeta() (m map[string]blob.BlobFileMeta) {
 				var meta blob.BlobFileMeta
 				meta.UnmarshalBinary(v)
 				prefix := string(k)
-				m[prefix] = meta
+				bfm[prefix] = meta
 				return nil
 			})
 			return nil
 		})
+	}
+	m = map[string]BoltDBBlobStoreStat{}
+	for prefix, meta := range bfm {
+		itemN := 0
+		s.db.View(func(tx *bbolt.Tx) error {
+			b := tx.Bucket([]byte(prefix))
+			if b == nil {
+				return ErrStoreCorrupt
+			}
+			itemN = b.Inspect().KeyN
+			return nil
+		})
+		m[prefix] = BoltDBBlobStoreStat{
+			Prefix:       prefix,
+			ItemN:        itemN,
+			BlobFileMeta: meta,
+		}
 	}
 	return
 }
