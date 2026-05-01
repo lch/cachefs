@@ -102,7 +102,7 @@ func (a *FileAttr) Equal(b *FileAttr) bool {
 func (a *FileAttr) String() string {
 	var ret string
 	ret += fmt.Sprintf("Size: %d\n", a.Length)
-	ret += fmt.Sprintf("Blocks: %d\n", a.Blocks)
+	ret += fmt.Sprintf("Blocks: %d\n", len(a.BlockIndices))
 	ret += fmt.Sprintf("Block Indices: %v\n", a.BlockIndices)
 	return ret
 }
