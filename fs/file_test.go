@@ -2,6 +2,7 @@ package fs
 
 import (
 	"context"
+	"syscall"
 	"testing"
 
 	"github.com/hanwen/go-fuse/v2/fuse"
@@ -181,5 +182,88 @@ func TestFileNode_FlushFsync_NilHandle(t *testing.T) {
 	}
 	if errno := fnode.Fsync(ctx, nil, 0); errno != 0 {
 		t.Errorf("Fsync(nil) = %v, want 0", errno)
+	}
+}
+
+func TestFileNode_Xattr(t *testing.T) {
+	root, _ := newTestRoot(t)
+	ctx := context.Background()
+
+	// 1. Create a prefix directory via RootNode
+	prefix := "01"
+	_, errno := root.Mkdir(ctx, prefix, 0o755, &fuse.EntryOut{})
+	if errno != 0 {
+		t.Fatalf("Mkdir failed: %v", errno)
+	}
+
+	prefixNode := &FileNode{
+		cfs:  root.cfs,
+		path: meta.Path{Prefix: prefix, Key: "", Kind: meta.PathIsPrefixFolder},
+	}
+
+	// 2. Create a file
+	fileName := "xattrfile"
+	var out fuse.EntryOut
+	_, _, _, errno = prefixNode.Create(ctx, fileName, 0, 0o644, &out)
+	if errno != 0 {
+		t.Fatalf("Create failed: %v", errno)
+	}
+
+	// Create the FileNode manually for testing methods
+	childKey := meta.ChildKey(prefixNode.path, fileName, false)
+	fnode := &FileNode{
+		cfs:  root.cfs,
+		path: meta.Path{Kind: meta.PathIsFile, Prefix: prefix, Key: childKey},
+	}
+
+	// Setxattr
+	xattrName := "user.test"
+	xattrVal := []byte("test_value")
+	errno = fnode.Setxattr(ctx, xattrName, xattrVal, 0)
+	if errno != 0 {
+		t.Fatalf("Setxattr failed: %v", errno)
+	}
+
+	// Getxattr
+	var getBuf []byte
+	size, errno := fnode.Getxattr(ctx, xattrName, getBuf)
+	if errno != syscall.ERANGE {
+		t.Fatalf("Getxattr for size failed: %v", errno)
+	}
+	getBuf = make([]byte, size)
+	_, errno = fnode.Getxattr(ctx, xattrName, getBuf)
+	if errno != 0 {
+		t.Fatalf("Getxattr failed: %v", errno)
+	}
+	if string(getBuf) != string(xattrVal) {
+		t.Errorf("Getxattr = %q, want %q", getBuf, xattrVal)
+	}
+
+	// Listxattr
+	var listBuf []byte
+	size, errno = fnode.Listxattr(ctx, listBuf)
+	if errno != syscall.ERANGE {
+		t.Fatalf("Listxattr for size failed: %v", errno)
+	}
+	listBuf = make([]byte, size)
+	_, errno = fnode.Listxattr(ctx, listBuf)
+	if errno != 0 {
+		t.Fatalf("Listxattr failed: %v", errno)
+	}
+	expectedList := "user.test\x00"
+	if string(listBuf) != expectedList {
+		t.Errorf("Listxattr = %q, want %q", listBuf, expectedList)
+	}
+
+	// Removexattr
+	errno = fnode.Removexattr(ctx, xattrName)
+	if errno != 0 {
+		t.Fatalf("Removexattr failed: %v", errno)
+	}
+
+	// Getxattr again
+	_, errno = fnode.Getxattr(ctx, xattrName, getBuf)
+	if errno != syscall.ENODATA {
+		t.Errorf("Getxattr after Removexattr = %v, want ENODATA", errno)
 	}
 }

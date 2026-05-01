@@ -12,6 +12,7 @@ import (
 	"github.com/hanwen/go-fuse/v2/fuse"
 	"github.com/lch/cachefs/internal/meta"
 	"github.com/lch/cachefs/store"
+	"golang.org/x/sys/unix"
 )
 
 // FileNode represents a cached regular file or directory inside a prefix directory.
@@ -22,19 +23,23 @@ type FileNode struct {
 }
 
 var (
-	_ fs.NodeOpener    = (*FileNode)(nil)
-	_ fs.NodeGetattrer = (*FileNode)(nil)
-	_ fs.NodeSetattrer = (*FileNode)(nil)
-	_ fs.NodeMkdirer   = (*FileNode)(nil)
-	_ fs.NodeLookuper  = (*FileNode)(nil)
-	_ fs.NodeRmdirer   = (*FileNode)(nil)
-	_ fs.NodeRenamer   = (*FileNode)(nil)
-	_ fs.NodeReaddirer = (*FileNode)(nil)
-	_ fs.NodeOpendirer = (*FileNode)(nil)
-	_ fs.NodeCreater   = (*FileNode)(nil)
-	_ fs.NodeUnlinker  = (*FileNode)(nil)
-	_ fs.NodeFlusher   = (*FileNode)(nil)
-	_ fs.NodeFsyncer   = (*FileNode)(nil)
+	_ fs.NodeOpener        = (*FileNode)(nil)
+	_ fs.NodeGetattrer     = (*FileNode)(nil)
+	_ fs.NodeSetattrer     = (*FileNode)(nil)
+	_ fs.NodeMkdirer       = (*FileNode)(nil)
+	_ fs.NodeLookuper      = (*FileNode)(nil)
+	_ fs.NodeRmdirer       = (*FileNode)(nil)
+	_ fs.NodeRenamer       = (*FileNode)(nil)
+	_ fs.NodeReaddirer     = (*FileNode)(nil)
+	_ fs.NodeOpendirer     = (*FileNode)(nil)
+	_ fs.NodeCreater       = (*FileNode)(nil)
+	_ fs.NodeUnlinker      = (*FileNode)(nil)
+	_ fs.NodeFlusher       = (*FileNode)(nil)
+	_ fs.NodeFsyncer       = (*FileNode)(nil)
+	_ fs.NodeGetxattrer    = (*FileNode)(nil)
+	_ fs.NodeSetxattrer    = (*FileNode)(nil)
+	_ fs.NodeListxattrer   = (*FileNode)(nil)
+	_ fs.NodeRemovexattrer = (*FileNode)(nil)
 )
 
 func (n *FileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
@@ -468,6 +473,105 @@ func (n *FileNode) Fsync(ctx context.Context, fh fs.FileHandle, flags uint32) sy
 		return h.Flush(ctx)
 	}
 	return 0
+}
+
+func (n *FileNode) Getxattr(ctx context.Context, name string, out []byte) (uint32, syscall.Errno) {
+	if n.cfs == nil || n.cfs.Store == nil {
+		return 0, syscall.EIO
+	}
+	attr, err := n.cfs.Store.GetMeta(n.path)
+	if err != nil {
+		return 0, fs.ToErrno(err)
+	}
+	if attr.XAttrs == nil {
+		return 0, syscall.ENODATA
+	}
+	val, ok := attr.XAttrs[name]
+	if !ok {
+		return 0, syscall.ENODATA
+	}
+	if len(out) < len(val) {
+		return uint32(len(val)), syscall.ERANGE
+	}
+	copy(out, []byte(val))
+	return uint32(len(val)), 0
+}
+
+func (n *FileNode) Setxattr(ctx context.Context, name string, value []byte, flags uint32) syscall.Errno {
+	if n.cfs == nil || n.cfs.Store == nil {
+		return syscall.EIO
+	}
+	attr, err := n.cfs.Store.GetMeta(n.path)
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+
+	if attr.XAttrs != nil {
+		_, ok := attr.XAttrs[name]
+		if flags == unix.XATTR_CREATE && ok {
+			return syscall.EEXIST
+		}
+		if flags == unix.XATTR_REPLACE && !ok {
+			return syscall.ENODATA
+		}
+	} else {
+		if flags == unix.XATTR_REPLACE {
+			return syscall.ENODATA
+		}
+		attr.XAttrs = make(map[string]string)
+	}
+	attr.XAttrs[name] = string(value)
+
+	err = n.cfs.Store.UpdateMeta(n.path, attr)
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+	return 0
+}
+
+func (n *FileNode) Removexattr(ctx context.Context, name string) syscall.Errno {
+	if n.cfs == nil || n.cfs.Store == nil {
+		return syscall.EIO
+	}
+	attr, err := n.cfs.Store.GetMeta(n.path)
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+	if attr.XAttrs == nil {
+		return syscall.ENODATA
+	}
+	if _, ok := attr.XAttrs[name]; !ok {
+		return syscall.ENODATA
+	}
+	delete(attr.XAttrs, name)
+	err = n.cfs.Store.UpdateMeta(n.path, attr)
+	if err != nil {
+		return fs.ToErrno(err)
+	}
+	return 0
+}
+
+func (n *FileNode) Listxattr(ctx context.Context, out []byte) (uint32, syscall.Errno) {
+	if n.cfs == nil || n.cfs.Store == nil {
+		return 0, syscall.EIO
+	}
+	attr, err := n.cfs.Store.GetMeta(n.path)
+	if err != nil {
+		return 0, fs.ToErrno(err)
+	}
+	if attr.XAttrs == nil {
+		return 0, syscall.ENODATA
+	}
+	var b []byte
+	for name := range attr.XAttrs {
+		b = append(b, name...)
+		b = append(b, 0)
+	}
+	if len(b) > len(out) {
+		return uint32(len(b)), syscall.ERANGE
+	}
+	copy(out, b)
+	return uint32(len(b)), 0
 }
 
 func resizeContent(content []byte, size uint64) []byte {

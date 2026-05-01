@@ -1,10 +1,10 @@
 package meta
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 	"syscall"
+
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 const (
@@ -22,9 +22,13 @@ type FileAttr struct {
 	Mtime        int64
 	Ctime        int64
 	Length       uint64
-	Blocks       uint64
 	BlockIndices []uint64
+	XAttrs       map[string]string
 }
+
+// Fix stack overflow according to
+// https://web.archive.org/web/20210511104619/https://msgpack.uptrace.dev/faq/#fatal-error-stack-overflow
+type rawFileAttr FileAttr
 
 // IsDir reports whether the attr represents a directory entry.
 func (a *FileAttr) IsDir() bool {
@@ -34,68 +38,24 @@ func (a *FileAttr) IsDir() bool {
 	return a.Mode&syscall.S_IFMT == syscall.S_IFDIR
 }
 
-// MarshalBinary encodes attr into a little-endian layout.
-func (a *FileAttr) MarshalBinary() (data []byte, err error) {
+// MarshalBinary encodes attr into a MsgPack binary format.
+func (a *FileAttr) MarshalBinary() ([]byte, error) {
 	if a == nil {
 		return nil, fmt.Errorf("meta: uninitialized FileAttr")
 	}
-	data = binary.LittleEndian.AppendUint32(data, a.Mode)
-	data = binary.LittleEndian.AppendUint32(data, a.Uid)
-	data = binary.LittleEndian.AppendUint32(data, a.Gid)
-	data = binary.LittleEndian.AppendUint64(data, uint64(a.Atime))
-	data = binary.LittleEndian.AppendUint64(data, uint64(a.Mtime))
-	data = binary.LittleEndian.AppendUint64(data, uint64(a.Ctime))
-	data = binary.LittleEndian.AppendUint64(data, a.Length)
-	data = binary.LittleEndian.AppendUint64(data, a.Blocks)
-	for _, v := range a.BlockIndices {
-		data = binary.LittleEndian.AppendUint64(data, v)
+	data, err := msgpack.Marshal((rawFileAttr)(*a))
+	if err != nil {
+		return nil, err
 	}
-	return
+	return data, nil
 }
 
-// UnmarshalBinary decodes a little-endian FileAttr value.
+// UnmarshalBinary decodes a MsgPack binary format.
 func (a *FileAttr) UnmarshalBinary(data []byte) error {
-	buf := bytes.NewBuffer(data)
-	if err := binary.Read(buf, binary.LittleEndian, &a.Mode); err != nil {
-		return err
+	if a == nil {
+		return fmt.Errorf("meta: uninitialized FileAttr")
 	}
-	if err := binary.Read(buf, binary.LittleEndian, &a.Uid); err != nil {
-		return err
-	}
-	if err := binary.Read(buf, binary.LittleEndian, &a.Gid); err != nil {
-		return err
-	}
-	var atime uint64
-	if err := binary.Read(buf, binary.LittleEndian, &atime); err != nil {
-		return err
-	}
-	a.Atime = int64(atime)
-	var mtime uint64
-	if err := binary.Read(buf, binary.LittleEndian, &mtime); err != nil {
-		return err
-	}
-	a.Mtime = int64(mtime)
-	var ctime uint64
-	if err := binary.Read(buf, binary.LittleEndian, &ctime); err != nil {
-		return err
-	}
-	a.Ctime = int64(ctime)
-	if err := binary.Read(buf, binary.LittleEndian, &a.Length); err != nil {
-		return err
-	}
-	if err := binary.Read(buf, binary.LittleEndian, &a.Blocks); err != nil {
-		return err
-	}
-	var blockIndices []uint64
-	for range a.Blocks {
-		var blockIndex uint64
-		if err := binary.Read(buf, binary.LittleEndian, &blockIndex); err != nil {
-			return err
-		}
-		blockIndices = append(blockIndices, blockIndex)
-	}
-	a.BlockIndices = blockIndices
-	return nil
+	return msgpack.Unmarshal(data, (*rawFileAttr)(a))
 }
 
 func (a *FileAttr) Equal(b *FileAttr) bool {
@@ -120,11 +80,19 @@ func (a *FileAttr) Equal(b *FileAttr) bool {
 	if a.Length != b.Length {
 		return false
 	}
-	if a.Blocks != b.Blocks {
+	if len(a.BlockIndices) != len(b.BlockIndices) {
 		return false
 	}
-	for i := range a.Blocks {
-		if a.BlockIndices[i] != b.BlockIndices[i] {
+	for i, v := range a.BlockIndices {
+		if v != b.BlockIndices[i] {
+			return false
+		}
+	}
+	if len(a.XAttrs) != len(b.XAttrs) {
+		return false
+	}
+	for i, v := range a.XAttrs {
+		if v != b.XAttrs[i] {
 			return false
 		}
 	}

@@ -14,8 +14,10 @@ func TestMarshalUnmarshalRoundTrip(t *testing.T) {
 		Mtime:        1712345679,
 		Ctime:        1712345680,
 		Length:       123456789,
-		Blocks:       10,
 		BlockIndices: []uint64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+		XAttrs: map[string]string{
+			"test": "test",
+		},
 	}
 
 	data, err := original.MarshalBinary()

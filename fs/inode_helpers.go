@@ -89,7 +89,7 @@ func fillFileEntryOut(out *fuse.EntryOut, cfs *CacheFS, attr *meta.FileAttr, ino
 		out.Nlink = 1
 	}
 	out.Size = attr.Length
-	out.Blocks = attr.Blocks
+	out.Blocks = uint64(len(attr.BlockIndices))
 	out.Blksize = meta.DefaultBlockSize
 	out.Uid = attr.Uid
 	out.Gid = attr.Gid
@@ -129,7 +129,7 @@ func fillFileAttrOut(out *fuse.AttrOut, cfs *CacheFS, attr *meta.FileAttr, ino u
 		out.Nlink = 1
 	}
 	out.Size = attr.Length
-	out.Blocks = attr.Blocks
+	out.Blocks = uint64(len(attr.BlockIndices))
 	out.Blksize = meta.DefaultBlockSize
 	out.Uid = attr.Uid
 	out.Gid = attr.Gid

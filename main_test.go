@@ -14,10 +14,10 @@ import (
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	cfs "github.com/lch/cachefs/fs"
 	"github.com/lch/cachefs/internal/meta"
 	"github.com/lch/cachefs/store"
-
-	cfs "github.com/lch/cachefs/fs"
+	"golang.org/x/sys/unix"
 )
 
 func TestIntegrationFilesystem(t *testing.T) {
@@ -338,6 +338,69 @@ func TestIntegrationFilesystem(t *testing.T) {
 			}
 			if string(backendData) != string(payload) {
 				t.Fatalf("Backend data = %q, want %q", backendData, payload)
+			}
+		})
+	})
+
+	t.Run("xattrs", func(t *testing.T) {
+		withMountedFS(t, func(mount string) {
+			prefix := filepath.Join(mount, "aa")
+			file := filepath.Join(prefix, "xattr.txt")
+			mustMkdir(t, prefix)
+			mustWriteFile(t, file, []byte("xattr test"))
+
+			xattrName := "user.test_xattr"
+			xattrVal := []byte("hello xattr")
+
+			// Set xattr
+			err := unix.Setxattr(file, xattrName, xattrVal, 0)
+			if err != nil {
+				t.Fatalf("Setxattr failed: %v", err)
+			}
+
+			// Get xattr size
+			sz, err := unix.Getxattr(file, xattrName, nil)
+			if err != nil {
+				t.Fatalf("Getxattr for size failed: %v", err)
+			}
+			if sz != len(xattrVal) {
+				t.Fatalf("Getxattr size = %d, want %d", sz, len(xattrVal))
+			}
+
+			// Get xattr value
+			valBuf := make([]byte, sz)
+			sz, err = unix.Getxattr(file, xattrName, valBuf)
+			if err != nil {
+				t.Fatalf("Getxattr failed: %v", err)
+			}
+			if string(valBuf[:sz]) != string(xattrVal) {
+				t.Fatalf("Getxattr = %q, want %q", valBuf[:sz], xattrVal)
+			}
+
+			// List xattrs
+			sz, err = unix.Listxattr(file, nil)
+			if err != nil {
+				t.Fatalf("Listxattr for size failed: %v", err)
+			}
+			listBuf := make([]byte, sz)
+			sz, err = unix.Listxattr(file, listBuf)
+			if err != nil {
+				t.Fatalf("Listxattr failed: %v", err)
+			}
+			if string(listBuf[:sz]) != xattrName+"\x00" {
+				t.Fatalf("Listxattr = %q, want %q", listBuf[:sz], xattrName+"\x00")
+			}
+
+			// Remove xattr
+			err = unix.Removexattr(file, xattrName)
+			if err != nil {
+				t.Fatalf("Removexattr failed: %v", err)
+			}
+
+			// Verify it's gone
+			_, err = unix.Getxattr(file, xattrName, valBuf)
+			if err != syscall.ENODATA {
+				t.Fatalf("Getxattr after remove = %v, want ENODATA", err)
 			}
 		})
 	})

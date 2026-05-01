@@ -123,7 +123,6 @@ func (s *BoltDBBlobStore) Write(p meta.Path, data []byte, mode uint32) error {
 		attr.Ctime = now
 	}
 	attr.Length = uint64(len(data))
-	attr.Blocks = uint64(len(blocks))
 	attr.BlockIndices = blocks
 	return s.UpdateMeta(p, attr)
 }
@@ -335,7 +334,6 @@ func (s *BoltDBBlobStore) Truncate(p meta.Path, newSize uint64) error {
 	attr.Length = newSize
 	attr.Mtime = now
 	attr.Ctime = now
-	attr.Blocks = uint64(len(attr.BlockIndices))
 	return s.UpdateMeta(p, attr)
 }
 
