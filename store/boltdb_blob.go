@@ -49,6 +49,26 @@ func NewStore(dir string) (Store, error) {
 	return s, nil
 }
 
+func NewStoreForRead(dir string) (Store, error) {
+	if dir == "" {
+		return nil, errors.New("store: empty dir")
+	}
+	dbPath := filepath.Join(dir, defaultMetadataDB)
+	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
+		return nil, errors.New("store: cachefs dir doesn't contains metadata.db")
+	}
+	db, err := bbolt.Open(dbPath, 0o600, nil)
+	if err != nil {
+		return nil, err
+	}
+	s, err := newBoltBlobStore(db)
+	if err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
 func (s *BoltDBBlobStore) Read(p meta.Path) (data []byte, attr *meta.FileAttr, err error) {
 	attr, err = s.GetMeta(p)
 	if err != nil {
