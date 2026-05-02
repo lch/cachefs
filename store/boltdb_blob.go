@@ -247,11 +247,14 @@ func (s *BoltDBBlobStore) getPrefixFolderMeta(p meta.Path) (*meta.FileAttr, erro
 		if b == nil {
 			return notFound("blob metadata bucket", p.String())
 		}
-		if b.Get([]byte(p.Prefix)) == nil {
+		data := b.Get([]byte(p.Prefix))
+		if data == nil {
 			return notFound("prefix", p.String())
 		}
-		attr = &meta.FileAttr{
-			Mode: uint32(syscall.S_IFDIR) | meta.DefaultDirMode,
+		attr = &meta.FileAttr{}
+		err := attr.UnmarshalBinary(data)
+		if err != nil {
+			return err
 		}
 		return nil
 	})
@@ -310,8 +313,18 @@ func (s *BoltDBBlobStore) updateRootFolderMeta(_ meta.Path, _ *meta.FileAttr) er
 	return nil
 }
 
-func (s *BoltDBBlobStore) updatePrefixFolderMeta(_ meta.Path, _ *meta.FileAttr) error {
-	return nil
+func (s *BoltDBBlobStore) updatePrefixFolderMeta(p meta.Path, attr *meta.FileAttr) error {
+	return s.db.Update(func(tx *bbolt.Tx) error {
+		mb, err := tx.CreateBucketIfNotExists([]byte(blob.BlobMetadataBucketName))
+		if err != nil {
+			return err
+		}
+		data, err := attr.MarshalBinary()
+		if err != nil {
+			return err
+		}
+		return mb.Put([]byte(p.Prefix), data)
+	})
 }
 
 func (s *BoltDBBlobStore) updateChildMeta(p meta.Path, attr *meta.FileAttr) error {

@@ -216,15 +216,20 @@ func TestFileNode_Xattr(t *testing.T) {
 		path: meta.Path{Kind: meta.PathIsFile, Prefix: prefix, Key: childKey},
 	}
 
-	// Setxattr
 	xattrName := "user.test"
 	xattrVal := []byte("test_value")
+	// Setxattr on subdirectory file
 	errno = fnode.Setxattr(ctx, xattrName, xattrVal, 0)
 	if errno != 0 {
-		t.Fatalf("Setxattr failed: %v", errno)
+		t.Fatalf("Setxattr failed on subdirectory file: %v", errno)
+	}
+	// Setxattr on prefix directory
+	errno = prefixNode.Setxattr(ctx, xattrName, xattrVal, 0)
+	if errno != 0 {
+		t.Fatalf("Setxattr failed on prefix directory: %v", errno)
 	}
 
-	// Getxattr
+	// Getxattr on subdirectory file
 	var getBuf []byte
 	size, errno := fnode.Getxattr(ctx, xattrName, getBuf)
 	if errno != syscall.ERANGE {
@@ -238,8 +243,25 @@ func TestFileNode_Xattr(t *testing.T) {
 	if string(getBuf) != string(xattrVal) {
 		t.Errorf("Getxattr = %q, want %q", getBuf, xattrVal)
 	}
+	// Getxattr on prefix directory
+	var getBuf2 []byte
+	size, errno = prefixNode.Getxattr(ctx, xattrName, getBuf2)
+	if errno != syscall.ERANGE {
+		t.Fatalf("Getxattr for size failed: %v", errno)
+	}
+	if size != uint32(len(xattrVal)) {
+		t.Errorf("Getxattr size = %d, want %d", size, len(xattrVal))
+	}
+	getBuf2 = make([]byte, size)
+	_, errno = prefixNode.Getxattr(ctx, xattrName, getBuf2)
+	if errno != 0 {
+		t.Fatalf("Getxattr failed: %v", errno)
+	}
+	if string(getBuf2) != string(xattrVal) {
+		t.Errorf("Getxattr = %q, want %q", getBuf2, xattrVal)
+	}
 
-	// Listxattr
+	// Listxattr on subdirectory file
 	var listBuf []byte
 	size, errno = fnode.Listxattr(ctx, listBuf)
 	if errno != syscall.ERANGE {
@@ -254,16 +276,46 @@ func TestFileNode_Xattr(t *testing.T) {
 	if string(listBuf) != expectedList {
 		t.Errorf("Listxattr = %q, want %q", listBuf, expectedList)
 	}
+	// Listxattr on prefix directory
+	var listBuf2 []byte
+	size, errno = prefixNode.Listxattr(ctx, listBuf2)
+	if errno != syscall.ERANGE {
+		t.Fatalf("Listxattr for size failed: %v", errno)
+	}
+	if size != uint32(len(xattrVal)) {
+		t.Errorf("Listxattr size = %d, want %d", size, len(xattrVal))
+	}
+	listBuf2 = make([]byte, size)
+	_, errno = prefixNode.Listxattr(ctx, listBuf2)
+	if errno != 0 {
+		t.Fatalf("Listxattr failed: %v", errno)
+	}
+	if string(listBuf2) != expectedList {
+		t.Errorf("Listxattr = %q, want %q", listBuf2, expectedList)
+	}
 
-	// Removexattr
+	// Removexattr on subdirectory file
 	errno = fnode.Removexattr(ctx, xattrName)
 	if errno != 0 {
 		t.Fatalf("Removexattr failed: %v", errno)
 	}
 
-	// Getxattr again
+	// Removexattr on prefix directory
+	errno = prefixNode.Removexattr(ctx, "user.test")
+	if errno != 0 {
+		t.Fatalf("Removexattr failed: %v", errno)
+	}
+
+	// Getxattr again on subdirectory file
 	_, errno = fnode.Getxattr(ctx, xattrName, getBuf)
 	if errno != syscall.ENODATA {
 		t.Errorf("Getxattr after Removexattr = %v, want ENODATA", errno)
 	}
+
+	// Getxattr again on prefix directory
+	_, errno = prefixNode.Getxattr(ctx, xattrName, getBuf2)
+	if errno != syscall.ENODATA {
+		t.Errorf("Getxattr after Removexattr = %v, want ENODATA", errno)
+	}
+
 }
