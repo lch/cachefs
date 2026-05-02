@@ -22,6 +22,10 @@ var (
 	_ = (fs.NodeRmdirer)((*RootNode)(nil))
 	_ = (fs.NodeGetattrer)((*RootNode)(nil))
 	_ = (fs.NodeStatfser)((*RootNode)(nil))
+	_ = (fs.NodeGetxattrer)((*RootNode)(nil))
+	_ = (fs.NodeListxattrer)((*RootNode)(nil))
+	_ = (fs.NodeRemovexattrer)((*RootNode)(nil))
+	_ = (fs.NodeSetxattrer)((*RootNode)(nil))
 )
 
 // RootNode represents the filesystem root and lists prefix directories.
@@ -169,4 +173,20 @@ func (n *RootNode) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errn
 	out.Ffree = 1 // 9M free files
 	out.NameLen = 255
 	return 0
+}
+
+func (n *RootNode) Getxattr(ctx context.Context, name string, value []byte) (uint32, syscall.Errno) {
+	return 0, syscall.ENODATA
+}
+
+func (n *RootNode) Listxattr(ctx context.Context, value []byte) (uint32, syscall.Errno) {
+	return 0, syscall.ENODATA
+}
+
+func (n *RootNode) Removexattr(ctx context.Context, name string) syscall.Errno {
+	return syscall.ENODATA
+}
+
+func (n *RootNode) Setxattr(ctx context.Context, name string, value []byte, flags uint32) syscall.Errno {
+	return syscall.ENODATA
 }

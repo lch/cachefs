@@ -234,28 +234,36 @@ func (s *BoltDBBlobStore) deleteFile(p meta.Path) error {
 	})
 }
 
-func (s *BoltDBBlobStore) GetMeta(p meta.Path) (attr *meta.FileAttr, err error) {
-	if p.Kind == meta.PathIsRootFolder {
-		return &meta.FileAttr{
-			Mode: uint32(syscall.S_IFDIR) | 0o755,
-		}, nil
-	}
+func (s *BoltDBBlobStore) getRootFolderMeta() (*meta.FileAttr, error) {
+	return &meta.FileAttr{
+		Mode: uint32(syscall.S_IFDIR) | meta.DefaultDirMode,
+	}, nil
+}
 
-	err = s.db.View(func(tx *bbolt.Tx) error {
-		if p.Kind == meta.PathIsPrefixFolder && p.Key == "" {
-			b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
-			if b == nil {
-				return notFound("blob metadata bucket", p.String())
-			}
-			if b.Get([]byte(p.Prefix)) == nil {
-				return notFound("prefix", p.String())
-			}
-			attr = &meta.FileAttr{
-				Mode: uint32(syscall.S_IFDIR) | 0o755,
-			}
-			return nil
+func (s *BoltDBBlobStore) getPrefixFolderMeta(p meta.Path) (*meta.FileAttr, error) {
+	var attr *meta.FileAttr
+	err := s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
+		if b == nil {
+			return notFound("blob metadata bucket", p.String())
 		}
+		if b.Get([]byte(p.Prefix)) == nil {
+			return notFound("prefix", p.String())
+		}
+		attr = &meta.FileAttr{
+			Mode: uint32(syscall.S_IFDIR) | meta.DefaultDirMode,
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return attr, nil
+}
 
+func (s *BoltDBBlobStore) getChildMeta(p meta.Path) (*meta.FileAttr, error) {
+	var attr *meta.FileAttr
+	err := s.db.View(func(tx *bbolt.Tx) error {
 		// For children (files or subfolders)
 		b := tx.Bucket([]byte(p.Prefix))
 		if b == nil {
@@ -287,11 +295,26 @@ func (s *BoltDBBlobStore) GetMeta(p meta.Path) (attr *meta.FileAttr, err error) 
 	return attr, nil
 }
 
-func (s *BoltDBBlobStore) UpdateMeta(p meta.Path, attr *meta.FileAttr) error {
-	if p.Kind == meta.PathIsRootFolder || p.Kind == meta.PathIsPrefixFolder {
-		return nil
+func (s *BoltDBBlobStore) GetMeta(p meta.Path) (*meta.FileAttr, error) {
+	switch p.Kind {
+	case meta.PathIsRootFolder:
+		return s.getRootFolderMeta()
+	case meta.PathIsPrefixFolder:
+		return s.getPrefixFolderMeta(p)
+	default:
+		return s.getChildMeta(p)
 	}
+}
 
+func (s *BoltDBBlobStore) updateRootFolderMeta(_ meta.Path, _ *meta.FileAttr) error {
+	return nil
+}
+
+func (s *BoltDBBlobStore) updatePrefixFolderMeta(_ meta.Path, _ *meta.FileAttr) error {
+	return nil
+}
+
+func (s *BoltDBBlobStore) updateChildMeta(p meta.Path, attr *meta.FileAttr) error {
 	return s.db.Update(func(tx *bbolt.Tx) error {
 		_, err := tx.CreateBucketIfNotExists([]byte(p.Prefix))
 		if err != nil {
@@ -320,6 +343,17 @@ func (s *BoltDBBlobStore) UpdateMeta(p meta.Path, attr *meta.FileAttr) error {
 		}
 		return nil
 	})
+}
+
+func (s *BoltDBBlobStore) UpdateMeta(p meta.Path, attr *meta.FileAttr) error {
+	switch p.Kind {
+	case meta.PathIsRootFolder:
+		return s.updateRootFolderMeta(p, attr)
+	case meta.PathIsPrefixFolder:
+		return s.updatePrefixFolderMeta(p, attr)
+	default:
+		return s.updateChildMeta(p, attr)
+	}
 }
 
 func (s *BoltDBBlobStore) Truncate(p meta.Path, newSize uint64) error {

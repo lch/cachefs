@@ -173,8 +173,7 @@ func (n *FileNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	}
 
 	childKey := meta.ChildKey(n.path, name, false)
-	childP := n.path
-	childP.Key = childKey
+	childP := meta.Path{Kind: meta.PathIsFile, Prefix: n.path.Prefix, Key: childKey}
 
 	exists, err := n.cfs.Store.Exists(childP)
 	if err != nil {
@@ -289,8 +288,7 @@ func (n *FileNode) Rename(ctx context.Context, name string, newParent fs.InodeEm
 	}
 
 	oldChildKey := meta.ChildKey(n.path, name, false)
-	oldChildP := n.path
-	oldChildP.Key = oldChildKey
+	oldChildP := meta.Path{Kind: meta.PathIsFile, Prefix: n.path.Prefix, Key: oldChildKey}
 
 	attr, err := n.cfs.Store.GetMeta(oldChildP)
 	if err != nil {
