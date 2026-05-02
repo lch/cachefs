@@ -1,15 +1,15 @@
 package blob
 
 import (
-	"bytes"
-	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 
 	"github.com/lch/cachefs/internal/meta"
+	"github.com/vmihailenco/msgpack/v5"
 	"go.etcd.io/bbolt"
 )
 
@@ -32,6 +32,15 @@ type BlobFile struct {
 }
 
 type BlobFileMeta struct {
+	meta.FileAttr
+	AllocatedBlocks uint64
+	RecycledBlocks  []uint64
+}
+
+type fileAttrNoMethods meta.FileAttr
+
+type rawBolbFileMeta struct {
+	Attr            fileAttrNoMethods `msgpack:",inline"`
 	AllocatedBlocks uint64
 	RecycledBlocks  []uint64
 }
@@ -221,32 +230,30 @@ func (m *BlobFileMeta) Save(prefix string, db *bbolt.DB) (err error) {
 }
 
 func (m *BlobFileMeta) MarshalBinary() (data []byte, err error) {
-	data = binary.LittleEndian.AppendUint64(data, m.AllocatedBlocks)
-	data = binary.LittleEndian.AppendUint64(data, uint64(len(m.RecycledBlocks)))
-	for _, blockInd := range m.RecycledBlocks {
-		data = binary.LittleEndian.AppendUint64(data, blockInd)
+	if m == nil {
+		return nil, fmt.Errorf("blob: uninitialized BlobFileMeta")
+	}
+	data, err = msgpack.Marshal(&rawBolbFileMeta{
+		Attr:            fileAttrNoMethods(m.FileAttr),
+		AllocatedBlocks: m.AllocatedBlocks,
+		RecycledBlocks:  m.RecycledBlocks,
+	})
+	if err != nil {
+		return nil, err
 	}
 	return
 }
 
 func (m *BlobFileMeta) UnmarshalBinary(data []byte) (err error) {
-	buf := bytes.NewReader(data)
-	if err := binary.Read(buf, binary.LittleEndian, &m.AllocatedBlocks); err != nil {
+	if m == nil {
+		return fmt.Errorf("blob: uninitialized BlobFileMeta")
+	}
+	var r rawBolbFileMeta
+	if err := msgpack.Unmarshal(data, &r); err != nil {
 		return err
 	}
-	var length uint64
-	err = binary.Read(buf, binary.LittleEndian, &length)
-	if err != nil {
-		return err
-	}
-	m.RecycledBlocks = make([]uint64, 0, length)
-	for i := 0; i < int(length); i++ {
-		var blockInd uint64
-		err = binary.Read(buf, binary.LittleEndian, &blockInd)
-		if err != nil {
-			return err
-		}
-		m.RecycledBlocks = append(m.RecycledBlocks, blockInd)
-	}
-	return
+	m.FileAttr = meta.FileAttr(r.Attr)
+	m.AllocatedBlocks = r.AllocatedBlocks
+	m.RecycledBlocks = r.RecycledBlocks
+	return nil
 }
