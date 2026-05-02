@@ -176,17 +176,17 @@ func (n *RootNode) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errn
 }
 
 func (n *RootNode) Getxattr(ctx context.Context, name string, value []byte) (uint32, syscall.Errno) {
-	return 0, syscall.ENODATA
+	return 0, syscall.ENOTSUP
 }
 
 func (n *RootNode) Listxattr(ctx context.Context, value []byte) (uint32, syscall.Errno) {
-	return 0, syscall.ENODATA
+	return 0, syscall.ENOTSUP
 }
 
 func (n *RootNode) Removexattr(ctx context.Context, name string) syscall.Errno {
-	return syscall.ENODATA
+	return syscall.ENOTSUP
 }
 
 func (n *RootNode) Setxattr(ctx context.Context, name string, value []byte, flags uint32) syscall.Errno {
-	return syscall.ENODATA
+	return syscall.ENOTSUP
 }

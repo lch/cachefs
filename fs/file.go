@@ -558,7 +558,7 @@ func (n *FileNode) Listxattr(ctx context.Context, out []byte) (uint32, syscall.E
 		return 0, fs.ToErrno(err)
 	}
 	if attr.XAttrs == nil {
-		return 0, syscall.ENODATA
+		return 0, 0
 	}
 	var b []byte
 	for name := range attr.XAttrs {
