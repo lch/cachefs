@@ -256,6 +256,7 @@ func (s *BoltDBBlobStore) getPrefixFolderMeta(p meta.Path) (*meta.FileAttr, erro
 		if err != nil {
 			return err
 		}
+		attr.Mode |= uint32(syscall.S_IFDIR)
 		return nil
 	})
 	if err != nil {
