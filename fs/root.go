@@ -55,16 +55,20 @@ func (n *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	if !exists {
 		return nil, syscall.ENOENT
 	}
+	attr, err := n.cfs.Store.GetMeta(path)
+	if err != nil {
+		return nil, syscall.ENOENT
+	}
 
 	ino := prefixDirIno(name)
 	child := n.GetChild(name)
 	if child != nil {
-		fillDirEntryOut(out, n.cfs, fuse.S_IFDIR|meta.DefaultDirMode, ino)
+		fillDirEntryOut(out, n.cfs, attr.Mode, ino)
 		return child, 0
 	}
 
 	stable := fs.StableAttr{
-		Mode: fuse.S_IFDIR,
+		Mode: attr.Mode,
 		Ino:  ino,
 	}
 	ops := &FileNode{
@@ -72,7 +76,7 @@ func (n *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		path: path,
 	}
 	child = newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
-	fillDirEntryOut(out, n.cfs, fuse.S_IFDIR|meta.DefaultDirMode, ino)
+	fillDirEntryOut(out, n.cfs, attr.Mode, ino)
 	return child, 0
 }
 
@@ -153,7 +157,7 @@ func (n *RootNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Attr
 	}
 
 	now := time.Now()
-	out.Mode = fuse.S_IFDIR | 0o755
+	out.Mode = fuse.S_IFDIR | meta.DefaultDirMode
 	out.Uid = n.cfs.Uid
 	out.Gid = n.cfs.Gid
 	out.Ino = InodeRoot
