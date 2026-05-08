@@ -17,7 +17,7 @@ func TestCacheFileHandle_ReadWrite(t *testing.T) {
 	p, _ := meta.NewPathFromString(path)
 	_ = st.Create(p)
 
-	h := &CacheFileHandle{
+	h := &FileHandle{
 		cfs:  root.cfs,
 		path: p,
 	}
@@ -78,7 +78,7 @@ func TestCacheFileHandle_Getattr(t *testing.T) {
 	_ = st.Create(p)
 	_ = st.Write(p, []byte("some data"), 0o644)
 
-	h := &CacheFileHandle{
+	h := &FileHandle{
 		cfs:  root.cfs,
 		path: p,
 	}
@@ -103,7 +103,7 @@ func TestCacheFileHandle_Atime(t *testing.T) {
 	_ = st.Create(p)
 	_ = st.Write(p, []byte("data"), 0o644)
 
-	h := &CacheFileHandle{
+	h := &FileHandle{
 		cfs:  root.cfs,
 		path: p,
 	}

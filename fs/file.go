@@ -58,11 +58,10 @@ func (n *FileNode) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint3
 	}
 	attrCopy := *attr
 
-	h := &CacheFileHandle{
+	h := &FileHandle{
 		cfs:  n.cfs,
 		path: n.path,
 		attr: &attrCopy,
-		mode: attr.Mode,
 		buf:  data,
 	}
 	return h, fuse.FOPEN_DIRECT_IO, 0
@@ -72,7 +71,7 @@ func (n *FileNode) Getattr(ctx context.Context, fh fs.FileHandle, out *fuse.Attr
 	if n.cfs == nil || n.cfs.Store == nil {
 		return syscall.EIO
 	}
-	if handle, ok := fh.(*CacheFileHandle); ok {
+	if handle, ok := fh.(*FileHandle); ok {
 		return handle.Getattr(ctx, out)
 	}
 	attr, err := n.cfs.Store.GetMeta(n.path)
@@ -105,10 +104,9 @@ func (n *FileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAt
 			}
 			return fs.ToErrno(err)
 		}
-		if handle, ok := fh.(*CacheFileHandle); ok && handle != nil {
+		if handle, ok := fh.(*FileHandle); ok && handle != nil {
 			handle.mu.Lock()
 			handle.buf = resizeContent(handle.buf, size)
-			handle.mode = attr.Mode
 			handle.mu.Unlock()
 		}
 		attr, err = n.cfs.Store.GetMeta(n.path)
@@ -156,11 +154,10 @@ func (n *FileNode) Setattr(ctx context.Context, fh fs.FileHandle, in *fuse.SetAt
 	}
 	fillFileAttrOut(out, n.cfs, attr, pathIno(n.path))
 	if fh != nil {
-		if handle, ok := fh.(*CacheFileHandle); ok {
+		if handle, ok := fh.(*FileHandle); ok {
 			handle.mu.Lock()
 			attrCopy := *attr
 			handle.attr = &attrCopy
-			handle.mode = attr.Mode
 			handle.mu.Unlock()
 		}
 	}
@@ -426,11 +423,10 @@ func (n *FileNode) Create(ctx context.Context, name string, flags uint32, mode u
 	childInode := newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
 	fillFileEntryOut(out, n.cfs, attr, ino)
 
-	h := &CacheFileHandle{
+	h := &FileHandle{
 		cfs:   n.cfs,
 		path:  childP,
 		attr:  attr,
-		mode:  attr.Mode,
 		buf:   nil,
 		dirty: false,
 	}
@@ -457,7 +453,7 @@ func (n *FileNode) Flush(ctx context.Context, fh fs.FileHandle) syscall.Errno {
 	if n.cfs == nil || n.cfs.Store == nil {
 		return syscall.EIO
 	}
-	if h, ok := fh.(*CacheFileHandle); ok && h != nil {
+	if h, ok := fh.(*FileHandle); ok && h != nil {
 		return h.Flush(ctx)
 	}
 	return 0
@@ -467,7 +463,7 @@ func (n *FileNode) Fsync(ctx context.Context, fh fs.FileHandle, flags uint32) sy
 	if n.cfs == nil || n.cfs.Store == nil {
 		return syscall.EIO
 	}
-	if h, ok := fh.(*CacheFileHandle); ok && h != nil {
+	if h, ok := fh.(*FileHandle); ok && h != nil {
 		return h.Flush(ctx)
 	}
 	return 0

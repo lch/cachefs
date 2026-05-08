@@ -25,9 +25,8 @@ type BlobManager struct {
 
 // BlobFile wraps an open blob file and its logical size.
 type BlobFile struct {
-	mu   sync.Mutex
-	f    *os.File
-	size uint64
+	mu sync.Mutex
+	f  *os.File
 	BlobFileMeta
 }
 
@@ -78,7 +77,7 @@ func (m *BlobManager) openOrCreateLocked(prefix string) (*BlobFile, error) {
 			bfm.AllocatedBlocks++
 		}
 	}
-	return &BlobFile{f: f, size: uint64(info.Size()), BlobFileMeta: bfm}, nil
+	return &BlobFile{f: f, BlobFileMeta: bfm}, nil
 }
 
 func (m *BlobManager) withBlobFile(prefix string, fn func(*BlobFile) error) error {
@@ -148,6 +147,34 @@ func (m *BlobManager) Write(prefix string, blocks []uint64, data []byte) error {
 				return err
 			}
 		}
+		return nil
+	})
+	return err
+}
+
+func (m *BlobManager) Allocate(prefix string, needed int) ([]uint64, error) {
+	var blocks []uint64
+	err := m.withBlobFile(prefix, func(bf *BlobFile) error {
+		for len(blocks) < needed && len(bf.RecycledBlocks) > 0 {
+			blocks = append(blocks, bf.RecycledBlocks[0])
+			bf.RecycledBlocks = bf.RecycledBlocks[1:]
+		}
+		if len(blocks) < needed {
+			nextBlock := bf.AllocatedBlocks
+			for len(blocks) < needed {
+				blocks = append(blocks, nextBlock)
+				nextBlock++
+			}
+			bf.AllocatedBlocks = nextBlock
+		}
+		return nil
+	})
+	return blocks, err
+}
+
+func (m *BlobManager) Release(prefix string, blocks []uint64) error {
+	err := m.withBlobFile(prefix, func(bf *BlobFile) error {
+		bf.RecycledBlocks = append(bf.RecycledBlocks, blocks...)
 		return nil
 	})
 	return err

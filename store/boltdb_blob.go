@@ -105,7 +105,7 @@ func (s *BoltDBBlobStore) Write(p meta.Path, data []byte, mode uint32) error {
 	}
 
 	if len(blocks) < neededBlocks {
-		more, err := s.allocateBlocks(p.Prefix, neededBlocks-len(blocks))
+		more, err := s.blobs.Allocate(p.Prefix, neededBlocks-len(blocks))
 		if err != nil {
 			return err
 		}
@@ -113,16 +113,13 @@ func (s *BoltDBBlobStore) Write(p meta.Path, data []byte, mode uint32) error {
 	} else if len(blocks) > neededBlocks {
 		extra := blocks[neededBlocks:]
 		blocks = blocks[:neededBlocks]
-		if err := s.releaseBlocks(p.Prefix, extra); err != nil {
+		if err := s.blobs.Release(p.Prefix, extra); err != nil {
 			return err
 		}
 	}
 
-	paddedData := data
-	if len(data) < neededBlocks*meta.DefaultBlockSize {
-		paddedData = make([]byte, neededBlocks*meta.DefaultBlockSize)
-		copy(paddedData, data)
-	}
+	paddedData := make([]byte, neededBlocks*meta.DefaultBlockSize)
+	copy(paddedData, data)
 
 	err = s.blobs.Write(p.Prefix, blocks, paddedData)
 	if err != nil {
@@ -222,7 +219,7 @@ func (s *BoltDBBlobStore) deleteFile(p meta.Path) error {
 	if err != nil {
 		return err
 	}
-	if err := s.releaseBlocks(p.Prefix, attr.BlockIndices); err != nil {
+	if err := s.blobs.Release(p.Prefix, attr.BlockIndices); err != nil {
 		return err
 	}
 	return s.db.Update(func(tx *bbolt.Tx) error {
@@ -385,7 +382,7 @@ func (s *BoltDBBlobStore) Truncate(p meta.Path, newSize uint64) error {
 	neededBlocks := (newSize + meta.DefaultBlockSize - 1) / meta.DefaultBlockSize
 
 	if uint64(len(attr.BlockIndices)) < neededBlocks {
-		more, err := s.allocateBlocks(p.Prefix, int(neededBlocks)-len(attr.BlockIndices))
+		more, err := s.blobs.Allocate(p.Prefix, int(neededBlocks)-len(attr.BlockIndices))
 		if err != nil {
 			return err
 		}
@@ -393,7 +390,7 @@ func (s *BoltDBBlobStore) Truncate(p meta.Path, newSize uint64) error {
 	} else if uint64(len(attr.BlockIndices)) > neededBlocks {
 		extra := attr.BlockIndices[neededBlocks:]
 		attr.BlockIndices = attr.BlockIndices[:neededBlocks]
-		if err := s.releaseBlocks(p.Prefix, extra); err != nil {
+		if err := s.blobs.Release(p.Prefix, extra); err != nil {
 			return err
 		}
 	}
@@ -730,46 +727,6 @@ func (s *BoltDBBlobStore) Close() error {
 
 func notFound(kind, path string) error {
 	return fmt.Errorf("store: %s %q: %w", kind, path, os.ErrNotExist)
-}
-
-func (s *BoltDBBlobStore) allocateBlocks(prefix string, needed int) ([]uint64, error) {
-	s.flMu.Lock()
-	defer s.flMu.Unlock()
-
-	var bm blob.BlobFileMeta
-	_ = bm.Load(prefix, s.db)
-
-	var blocks []uint64
-	for len(blocks) < needed && len(bm.RecycledBlocks) > 0 {
-		blocks = append(blocks, bm.RecycledBlocks[len(bm.RecycledBlocks)-1])
-		bm.RecycledBlocks = bm.RecycledBlocks[:len(bm.RecycledBlocks)-1]
-	}
-
-	if len(blocks) < needed {
-		nextBlock := bm.AllocatedBlocks
-		for len(blocks) < needed {
-			blocks = append(blocks, nextBlock)
-			nextBlock++
-		}
-		bm.AllocatedBlocks = nextBlock
-	}
-
-	err := bm.Save(prefix, s.db)
-	return blocks, err
-}
-
-func (s *BoltDBBlobStore) releaseBlocks(prefix string, blocks []uint64) error {
-	if len(blocks) == 0 {
-		return nil
-	}
-	s.flMu.Lock()
-	defer s.flMu.Unlock()
-
-	var bm blob.BlobFileMeta
-	_ = bm.Load(prefix, s.db)
-
-	bm.RecycledBlocks = append(bm.RecycledBlocks, blocks...)
-	return bm.Save(prefix, s.db)
 }
 
 type BoltDBBlobStoreStat struct {

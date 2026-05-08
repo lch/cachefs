@@ -110,7 +110,7 @@ func TestFileNode_FlushFsync(t *testing.T) {
 	if errno != 0 {
 		t.Fatalf("Create failed: %v", errno)
 	}
-	h := fh.(*CacheFileHandle)
+	h := fh.(*FileHandle)
 
 	// Create the FileNode manually for testing methods
 	fnode := &FileNode{

@@ -11,19 +11,18 @@ import (
 	"github.com/lch/cachefs/internal/meta"
 )
 
-// CacheFileHandle is the per-open handle state for a cached file.
-type CacheFileHandle struct {
+// FileHandle is the per-open handle state for a file stored.
+type FileHandle struct {
 	cfs  *CacheFS
 	path meta.Path
 	attr *meta.FileAttr
-	mode uint32
 
 	mu    sync.Mutex
 	buf   []byte
 	dirty bool
 }
 
-func (h *CacheFileHandle) touchAtime() error {
+func (h *FileHandle) touchAtime() error {
 	if h == nil || h.cfs == nil || h.cfs.Store == nil {
 		return nil
 	}
@@ -42,14 +41,14 @@ func (h *CacheFileHandle) touchAtime() error {
 }
 
 var (
-	_ fs.FileReader    = (*CacheFileHandle)(nil)
-	_ fs.FileWriter    = (*CacheFileHandle)(nil)
-	_ fs.FileGetattrer = (*CacheFileHandle)(nil)
-	_ fs.FileFlusher   = (*CacheFileHandle)(nil)
-	_ fs.FileReleaser  = (*CacheFileHandle)(nil)
+	_ fs.FileReader    = (*FileHandle)(nil)
+	_ fs.FileWriter    = (*FileHandle)(nil)
+	_ fs.FileGetattrer = (*FileHandle)(nil)
+	_ fs.FileFlusher   = (*FileHandle)(nil)
+	_ fs.FileReleaser  = (*FileHandle)(nil)
 )
 
-func (h *CacheFileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
+func (h *FileHandle) Read(ctx context.Context, dest []byte, off int64) (fuse.ReadResult, syscall.Errno) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -73,7 +72,7 @@ func (h *CacheFileHandle) Read(ctx context.Context, dest []byte, off int64) (fus
 	return fuse.ReadResultData(h.buf[off:end]), 0
 }
 
-func (h *CacheFileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Errno {
+func (h *FileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscall.Errno {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -89,7 +88,7 @@ func (h *CacheFileHandle) Getattr(ctx context.Context, out *fuse.AttrOut) syscal
 	return 0
 }
 
-func (h *CacheFileHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
+func (h *FileHandle) Write(ctx context.Context, data []byte, off int64) (uint32, syscall.Errno) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -128,7 +127,7 @@ func (h *CacheFileHandle) Write(ctx context.Context, data []byte, off int64) (ui
 	return uint32(len(data)), 0
 }
 
-func (h *CacheFileHandle) Flush(ctx context.Context) syscall.Errno {
+func (h *FileHandle) Flush(ctx context.Context) syscall.Errno {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -150,6 +149,6 @@ func (h *CacheFileHandle) Flush(ctx context.Context) syscall.Errno {
 	return 0
 }
 
-func (h *CacheFileHandle) Release(ctx context.Context) syscall.Errno {
+func (h *FileHandle) Release(ctx context.Context) syscall.Errno {
 	return h.Flush(ctx)
 }
