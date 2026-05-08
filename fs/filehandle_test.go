@@ -15,7 +15,7 @@ func TestCacheFileHandle_ReadWrite(t *testing.T) {
 
 	path := "01/test.txt"
 	p, _ := meta.NewPathFromString(path)
-	_ = st.Create(p)
+	_ = st.Create(p, 0, meta.DefaultFileMode)
 
 	h := &FileHandle{
 		cfs:  root.cfs,
@@ -75,7 +75,7 @@ func TestCacheFileHandle_Getattr(t *testing.T) {
 
 	path := "0a/attr.txt"
 	p, _ := meta.NewPathFromString(path)
-	_ = st.Create(p)
+	_ = st.Create(p, 0, meta.DefaultFileMode)
 	_ = st.Write(p, []byte("some data"), 0o644)
 
 	h := &FileHandle{
@@ -100,7 +100,7 @@ func TestCacheFileHandle_Atime(t *testing.T) {
 
 	path := "0b/atime.txt"
 	p, _ := meta.NewPathFromString(path)
-	_ = st.Create(p)
+	_ = st.Create(p, 0, meta.DefaultFileMode)
 	_ = st.Write(p, []byte("data"), 0o644)
 
 	h := &FileHandle{

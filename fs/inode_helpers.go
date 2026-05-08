@@ -137,19 +137,19 @@ func fillFileAttrOut(out *fuse.AttrOut, cfs *CacheFS, attr *meta.FileAttr, ino u
 	out.SetTimes(&atime, &mtime, &ctime)
 }
 
-func fillDirEntryOut(out *fuse.EntryOut, cfs *CacheFS, mode uint32, ino uint64) {
+func fillDirEntryOut(out *fuse.EntryOut, cfs *CacheFS, attr *meta.FileAttr, ino uint64) {
 	if out == nil || cfs == nil {
 		return
 	}
 
 	now := time.Now()
-	out.Mode = mode
+	out.Mode = attr.Mode
 	out.Nlink = 2
 	out.Size = 0
 	out.Blocks = 0
 	out.Blksize = meta.DefaultBlockSize
-	out.Uid = cfs.Uid
-	out.Gid = cfs.Gid
+	out.Uid = attr.Uid
+	out.Gid = attr.Gid
 	out.Ino = ino
 	out.SetTimes(&now, &now, &now)
 }

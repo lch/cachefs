@@ -175,7 +175,7 @@ func TestDirectoryOperations(t *testing.T) {
 
 	// Create prefix
 	prefix := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: "cc", Key: ""}
-	err := s.Create(prefix)
+	err := s.Mkdir(prefix)
 	if err != nil {
 		t.Fatalf("Create prefix failed: %v", err)
 	}
@@ -188,7 +188,7 @@ func TestDirectoryOperations(t *testing.T) {
 	sub.Kind = meta.PathIsSubFolder
 	sub.Key = "sub/"
 	// Create subfolder
-	err = s.Create(sub)
+	err = s.Mkdir(sub)
 	if err != nil {
 		t.Fatalf("Create subfolder failed: %v", err)
 	}

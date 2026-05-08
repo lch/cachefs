@@ -27,7 +27,8 @@ type Store interface {
 	UpdateMeta(path meta.Path, attr *meta.FileAttr) error
 	Truncate(path meta.Path, newSize uint64) error
 	List(path meta.Path) ([]string, error)
-	Create(path meta.Path) error
+	Create(path meta.Path, flags, mode uint32) error
+	Mkdir(path meta.Path) error
 	Exists(path meta.Path) (bool, error)
 	Rename(oldPath, newPath meta.Path) error
 	Stats() StoreStats

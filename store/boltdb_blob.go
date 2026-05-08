@@ -239,6 +239,7 @@ func (s *BoltDBBlobStore) getRootFolderMeta() (*meta.FileAttr, error) {
 
 func (s *BoltDBBlobStore) getPrefixFolderMeta(p meta.Path) (*meta.FileAttr, error) {
 	var attr *meta.FileAttr
+	var bfm blob.BlobFileMeta
 	err := s.db.View(func(tx *bbolt.Tx) error {
 		b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
 		if b == nil {
@@ -248,11 +249,11 @@ func (s *BoltDBBlobStore) getPrefixFolderMeta(p meta.Path) (*meta.FileAttr, erro
 		if data == nil {
 			return notFound("prefix", p.String())
 		}
-		attr = &meta.FileAttr{}
-		err := attr.UnmarshalBinary(data)
+		err := bfm.UnmarshalBinary(data)
 		if err != nil {
 			return err
 		}
+		attr = &bfm.FileAttr
 		attr.Mode |= uint32(syscall.S_IFDIR)
 		return nil
 	})
@@ -312,17 +313,42 @@ func (s *BoltDBBlobStore) updateRootFolderMeta(_ meta.Path, _ *meta.FileAttr) er
 }
 
 func (s *BoltDBBlobStore) updatePrefixFolderMeta(p meta.Path, attr *meta.FileAttr) error {
-	return s.db.Update(func(tx *bbolt.Tx) error {
+	var bfm blob.BlobFileMeta
+	err := s.db.Update(func(tx *bbolt.Tx) error {
+		_, err := tx.CreateBucketIfNotExists([]byte(blob.BlobMetadataBucketName))
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	s.db.View(func(tx *bbolt.Tx) error {
+		b := tx.Bucket([]byte(blob.BlobMetadataBucketName))
+		if b == nil {
+			return notFound("blob metadata bucket", p.String())
+		}
+		data := b.Get([]byte(p.Prefix))
+		if data == nil {
+			return notFound("prefix", p.String())
+		}
+		err := bfm.UnmarshalBinary(data)
+		if err != nil {
+			return err
+		}
+		return nil
+	})
+	bfm.FileAttr = *attr
+	s.db.Update(func(tx *bbolt.Tx) error {
 		mb, err := tx.CreateBucketIfNotExists([]byte(blob.BlobMetadataBucketName))
 		if err != nil {
 			return err
 		}
-		data, err := attr.MarshalBinary()
+		data, err := bfm.MarshalBinary()
 		if err != nil {
 			return err
 		}
 		return mb.Put([]byte(p.Prefix), data)
 	})
+	return err
 }
 
 func (s *BoltDBBlobStore) updateChildMeta(p meta.Path, attr *meta.FileAttr) error {
@@ -478,26 +504,7 @@ func (s *BoltDBBlobStore) listSubFolder(p meta.Path) ([]string, error) {
 	return list, err
 }
 
-func (s *BoltDBBlobStore) Create(p meta.Path) error {
-	if p.Kind == meta.PathIsPrefixFolder {
-		return s.db.Update(func(tx *bbolt.Tx) error {
-			_, err := tx.CreateBucketIfNotExists([]byte(p.Prefix))
-			if err != nil {
-				return err
-			}
-			b, err := tx.CreateBucketIfNotExists([]byte(blob.BlobMetadataBucketName))
-			if err != nil {
-				return err
-			}
-			if b.Get([]byte(p.Prefix)) != nil {
-				return os.ErrExist
-			}
-			bm := blob.BlobFileMeta{}
-			data, _ := bm.MarshalBinary()
-			return b.Put([]byte(p.Prefix), data)
-		})
-	}
-
+func (s *BoltDBBlobStore) Create(p meta.Path, flags uint32, mode uint32) error {
 	exists, err := s.Exists(p)
 	if err != nil {
 		return err
@@ -505,14 +512,42 @@ func (s *BoltDBBlobStore) Create(p meta.Path) error {
 	if exists {
 		return os.ErrExist
 	}
-
+	now := time.Now().UnixNano()
 	attr := &meta.FileAttr{
-		Mode: meta.DefaultFileMode,
-	}
-	if p.Kind == meta.PathIsSubFolder {
-		attr.Mode = uint32(syscall.S_IFDIR) | meta.DefaultDirMode
+		Mode:  (mode & 0o777),
+		Atime: now,
+		Mtime: now,
+		Ctime: now,
 	}
 	return s.UpdateMeta(p, attr)
+}
+
+func (s *BoltDBBlobStore) Mkdir(p meta.Path) error {
+	exists, err := s.Exists(p)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return os.ErrExist
+	}
+	now := time.Now().UnixNano()
+	switch p.Kind {
+	case meta.PathIsPrefixFolder:
+		return s.updatePrefixFolderMeta(p, &meta.FileAttr{
+			Atime: now,
+			Mtime: now,
+			Ctime: now,
+		})
+	case meta.PathIsSubFolder:
+		return s.updateChildMeta(p, &meta.FileAttr{
+			Atime: now,
+			Mtime: now,
+			Ctime: now,
+		})
+	default:
+
+	}
+	return nil
 }
 
 func (s *BoltDBBlobStore) Exists(p meta.Path) (bool, error) {
@@ -640,7 +675,7 @@ func (s *BoltDBBlobStore) renameAcrossPrefixes(oldPath, newPath meta.Path) error
 
 func (s *BoltDBBlobStore) renameDirAcrossPrefixes(oldPath, newPath meta.Path) error {
 	// 1. Create target directory
-	if err := s.Create(newPath); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := s.Mkdir(newPath); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
 

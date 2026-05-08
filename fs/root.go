@@ -48,13 +48,6 @@ func (n *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	}
 
 	path := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: name}
-	exists, err := n.cfs.Store.Exists(path)
-	if err != nil {
-		return nil, fs.ToErrno(err)
-	}
-	if !exists {
-		return nil, syscall.ENOENT
-	}
 	attr, err := n.cfs.Store.GetMeta(path)
 	if err != nil {
 		return nil, syscall.ENOENT
@@ -63,7 +56,7 @@ func (n *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	ino := prefixDirIno(name)
 	child := n.GetChild(name)
 	if child != nil {
-		fillDirEntryOut(out, n.cfs, attr.Mode, ino)
+		fillDirEntryOut(out, n.cfs, attr, ino)
 		return child, 0
 	}
 
@@ -76,7 +69,7 @@ func (n *RootNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 		path: path,
 	}
 	child = newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
-	fillDirEntryOut(out, n.cfs, attr.Mode, ino)
+	fillDirEntryOut(out, n.cfs, attr, ino)
 	return child, 0
 }
 
@@ -111,13 +104,19 @@ func (n *RootNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 	}
 	name = strings.ToLower(name)
 	path := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: name, Key: ""}
-	err := n.cfs.Store.Create(path)
+	err := n.cfs.Store.Mkdir(path)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, syscall.EEXIST
 		}
 		return nil, fs.ToErrno(err)
 	}
+	attr := meta.FileAttr{
+		Mode: uint32(syscall.S_IFDIR) | (mode & 0o777),
+		Uid:  n.cfs.Uid,
+		Gid:  n.cfs.Gid,
+	}
+	_ = n.cfs.Store.UpdateMeta(path, &attr)
 
 	ino := prefixDirIno(name)
 	stable := fs.StableAttr{
@@ -129,7 +128,7 @@ func (n *RootNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 		path: path,
 	}
 	child := newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
-	fillDirEntryOut(out, n.cfs, fuse.S_IFDIR|(mode&0o777), ino)
+	fillDirEntryOut(out, n.cfs, &attr, ino)
 	return child, 0
 }
 

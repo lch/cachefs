@@ -23,7 +23,7 @@ func TestRootNode_Lookup(t *testing.T) {
 	}
 
 	// Create it
-	err := st.Create(meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: prefix})
+	err := st.Mkdir(meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: prefix})
 	if err != nil {
 		t.Fatalf("failed to create prefix: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestRootNode_Rmdir(t *testing.T) {
 
 	prefix := "bb"
 	path := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: prefix}
-	_ = st.Create(path)
+	_ = st.Mkdir(path)
 	errno := root.Rmdir(ctx, prefix)
 	if errno != 0 {
 		t.Fatalf("rmdir failed: %v", errno)
@@ -100,7 +100,7 @@ func TestRootNode_Readdir(t *testing.T) {
 	}
 
 	for _, prefix := range prefixes {
-		_ = st.Create(prefix)
+		_ = st.Mkdir(prefix)
 	}
 
 	names, err := readDirEntries(root)
@@ -164,7 +164,7 @@ func TestRootNode_Statfs(t *testing.T) {
 	// Add files and check count
 	prefix := "01"
 	path := meta.Path{Kind: meta.PathIsPrefixFolder, Prefix: prefix}
-	_ = st.Create(path)
+	_ = st.Mkdir(path)
 	files := map[meta.Path]string{
 		{Kind: meta.PathIsFile, Prefix: prefix, Key: "f1"}: "hello",
 		{Kind: meta.PathIsFile, Prefix: prefix, Key: "f2"}: "world",

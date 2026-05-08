@@ -199,7 +199,7 @@ func (n *FileNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	child := n.GetChild(name)
 	if child != nil {
 		if attr.IsDir() {
-			fillDirEntryOut(out, n.cfs, attr.Mode, ino)
+			fillDirEntryOut(out, n.cfs, attr, ino)
 		} else {
 			fillFileEntryOut(out, n.cfs, attr, ino)
 		}
@@ -221,7 +221,7 @@ func (n *FileNode) Lookup(ctx context.Context, name string, out *fuse.EntryOut) 
 	}
 	child = newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
 	if attr.IsDir() {
-		fillDirEntryOut(out, n.cfs, attr.Mode, ino)
+		fillDirEntryOut(out, n.cfs, attr, ino)
 	} else {
 		fillFileEntryOut(out, n.cfs, attr, ino)
 	}
@@ -235,7 +235,7 @@ func (n *FileNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 	childKey := meta.ChildKey(n.path, name, true)
 	childP := meta.Path{Kind: meta.PathIsSubFolder, Prefix: n.path.Prefix, Key: childKey}
 
-	err := n.cfs.Store.Create(childP)
+	err := n.cfs.Store.Mkdir(childP)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, syscall.EEXIST
@@ -243,9 +243,12 @@ func (n *FileNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 		return nil, fs.ToErrno(err)
 	}
 
-	attr, _ := n.cfs.Store.GetMeta(childP)
-	attr.Mode = uint32(syscall.S_IFDIR) | (mode & 0o777)
-	_ = n.cfs.Store.UpdateMeta(childP, attr)
+	attr := meta.FileAttr{
+		Mode: uint32(syscall.S_IFDIR) | (mode & 0o777),
+		Uid:  n.cfs.Uid,
+		Gid:  n.cfs.Gid,
+	}
+	_ = n.cfs.Store.UpdateMeta(childP, &attr)
 
 	ino := pathIno(childP)
 	stable := fs.StableAttr{
@@ -257,7 +260,7 @@ func (n *FileNode) Mkdir(ctx context.Context, name string, mode uint32, out *fus
 		path: childP,
 	}
 	child := newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
-	fillDirEntryOut(out, n.cfs, attr.Mode, ino)
+	fillDirEntryOut(out, n.cfs, &attr, ino)
 	return child, 0
 }
 
@@ -399,7 +402,7 @@ func (n *FileNode) Create(ctx context.Context, name string, flags uint32, mode u
 	childKey := meta.ChildKey(n.path, name, false)
 	childP := meta.Path{Kind: meta.PathIsFile, Prefix: n.path.Prefix, Key: childKey}
 
-	err := n.cfs.Store.Create(childP)
+	err := n.cfs.Store.Create(childP, flags, mode)
 	if err != nil {
 		if errors.Is(err, os.ErrExist) {
 			return nil, nil, 0, syscall.EEXIST
@@ -407,9 +410,12 @@ func (n *FileNode) Create(ctx context.Context, name string, flags uint32, mode u
 		return nil, nil, 0, fs.ToErrno(err)
 	}
 
-	attr, _ := n.cfs.Store.GetMeta(childP)
-	attr.Mode = uint32(syscall.S_IFREG) | (mode & 0o777)
-	_ = n.cfs.Store.UpdateMeta(childP, attr)
+	attr := meta.FileAttr{
+		Mode: uint32(syscall.S_IFREG) | (mode & 0o777),
+		Uid:  n.cfs.Uid,
+		Gid:  n.cfs.Gid,
+	}
+	_ = n.cfs.Store.UpdateMeta(childP, &attr)
 
 	ino := pathIno(childP)
 	stable := fs.StableAttr{
@@ -421,12 +427,12 @@ func (n *FileNode) Create(ctx context.Context, name string, flags uint32, mode u
 		path: childP,
 	}
 	childInode := newInodeOrPlaceholder(&n.Inode, ctx, ops, stable)
-	fillFileEntryOut(out, n.cfs, attr, ino)
+	fillFileEntryOut(out, n.cfs, &attr, ino)
 
 	h := &FileHandle{
 		cfs:   n.cfs,
 		path:  childP,
-		attr:  attr,
+		attr:  &attr,
 		buf:   nil,
 		dirty: false,
 	}
