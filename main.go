@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -36,6 +37,8 @@ func run(args []string) error {
 	allowOther := fsFlags.Bool("allow_other", false, "allow other users to access the mount")
 	uid := fsFlags.Uint("uid", uint(os.Getuid()), "default file owner UID")
 	gid := fsFlags.Uint("gid", uint(os.Getgid()), "default file owner GID")
+	fg := fsFlags.Bool("fg", false, "run program in foreground")
+	isDaemon := fsFlags.Bool("_daemon", false, "internal use only")
 
 	if err := fsFlags.Parse(args); err != nil {
 		return err
@@ -55,9 +58,80 @@ func run(args []string) error {
 		return fmt.Errorf("mountpoint %q is not a directory", mountPoint)
 	}
 
+	if !*fg && !*isDaemon {
+		r, w, err := os.Pipe()
+		if err != nil {
+			return fmt.Errorf("create signal pipe: %w", err)
+		}
+		defer r.Close()
+
+		binPath, err := os.Executable()
+		if err != nil {
+			binPath = os.Args[0]
+		}
+
+		childArgs := make([]string, 0, len(args)+1)
+		childArgs = append(childArgs, "-_daemon")
+		childArgs = append(childArgs, args...)
+
+		cmd := exec.Command(binPath, childArgs...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{
+			Setsid: true,
+		}
+		cmd.ExtraFiles = []*os.File{w}
+
+		cmd.Stdin = nil
+		cmd.Stdout = nil
+		cmd.Stderr = nil
+
+		if err := cmd.Start(); err != nil {
+			w.Close()
+			return fmt.Errorf("start daemon: %w", err)
+		}
+
+		w.Close()
+
+		buf := make([]byte, 1024)
+		n, readErr := r.Read(buf)
+		if readErr != nil {
+			if waitErr := cmd.Wait(); waitErr != nil {
+				return fmt.Errorf("daemon failed to start: %w", waitErr)
+			}
+			return errors.New("daemon exited prematurely without signaling success")
+		}
+
+		sigStr := string(buf[:n])
+		if sigStr != "ok" {
+			return fmt.Errorf("daemon initialization failed: %s", sigStr)
+		}
+
+		os.Exit(0)
+	}
+
+	var signalPipe *os.File
+	if *isDaemon {
+		signalPipe = os.NewFile(3, "signal-pipe")
+	}
+
+	signalSuccess := func() {
+		if signalPipe != nil {
+			_, _ = signalPipe.Write([]byte("ok"))
+			_ = signalPipe.Close()
+		}
+	}
+
+	signalFailure := func(err error) {
+		if signalPipe != nil {
+			_, _ = signalPipe.Write([]byte(err.Error()))
+			_ = signalPipe.Close()
+		}
+	}
+
 	st, err := store.NewStore(backendDir)
 	if err != nil {
-		return fmt.Errorf("open store: %w", err)
+		err = fmt.Errorf("open store: %w", err)
+		signalFailure(err)
+		return err
 	}
 	defer func() {
 		if cerr := st.Close(); cerr != nil {
@@ -83,8 +157,12 @@ func run(args []string) error {
 		FirstAutomaticIno: 2,
 	})
 	if err != nil {
-		return fmt.Errorf("mount filesystem: %w", err)
+		err = fmt.Errorf("mount filesystem: %w", err)
+		signalFailure(err)
+		return err
 	}
+
+	signalSuccess()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
